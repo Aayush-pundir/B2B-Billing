@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Client, Commercial, CommercialVersion, Metric, Addon, User, AuditLog
+from app.models import Client, Commercial, CommercialVersion, Invoice, Metric, Addon, Payment, User, AuditLog
 from app.services.auth import require_user, require_write
 from app.services.engine import escalate_rules
 from app.services import settings_store
@@ -109,6 +109,45 @@ async def bulk_import_clients(file: UploadFile = File(...), db: Session = Depend
     db.commit()
     log_action(db, user, "client.bulk_import", "client", f"created={created} skipped={len(skipped)}")
     return {"created": created, "skipped": skipped}
+
+
+@router.get("/clients/{client_id}/statement")
+def client_statement(client_id: int, db: Session = Depends(get_db), user: User = Depends(require_user)):
+    """Running ledger of everything issued to and collected from a client —
+    the document finance teams ask for most often."""
+    client = db.query(Client).get(client_id)
+    if not client:
+        raise HTTPException(404, "Client not found")
+
+    invoices = db.query(Invoice).filter(Invoice.client_id == client_id).order_by(Invoice.created_at).all()
+    payments = db.query(Payment).filter(Payment.client_id == client_id).order_by(Payment.date).all()
+
+    entries = []
+    for inv in invoices:
+        entries.append({
+            "date": inv.issued_at.isoformat() if inv.issued_at else inv.created_at.isoformat(),
+            "type": "invoice", "ref": inv.invoice_no, "debit": inv.total, "credit": 0.0,
+            "status": inv.status,
+        })
+    for p in payments:
+        entries.append({
+            "date": p.date, "type": "payment", "ref": p.reference or f"payment#{p.id}",
+            "debit": 0.0, "credit": p.amount, "status": p.match_confidence or "matched",
+        })
+    entries.sort(key=lambda e: e["date"])
+
+    running = 0.0
+    for e in entries:
+        running += e["debit"] - e["credit"]
+        e["running_balance"] = round(running, 2)
+
+    return {
+        "client": {"id": client.id, "name": client.name, "enterprise_id": client.enterprise_id},
+        "entries": entries,
+        "total_billed": round(sum(i.total for i in invoices), 2),
+        "total_collected": round(sum(p.amount for p in payments), 2),
+        "outstanding": round(running, 2),
+    }
 
 
 @router.get("/clients/template")

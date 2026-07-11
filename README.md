@@ -1,15 +1,38 @@
 # B2B Billing Automation Platform
 
-Offline-first tool to automate monthly usage-based billing for B2B corporate
-clients: auto-extracts commercial terms from agreement documents (DOCX,
+Offline-first, end-to-end order-to-cash (O2C) platform for B2B corporate
+billing: auto-extracts commercial terms from agreement documents (DOCX,
 digital/scanned PDF, PNG/JPG — including phone-camera photos), runs a
 flexible slab billing engine over monthly CSV usage exports, applies GST/TDS,
-and pushes draft invoices to Zoho Books for review. Nothing is ever
-auto-approved — every extraction lands as a DRAFT commercial and every
-invoice as a DRAFT in Zoho, always human-reviewed before it goes out.
+issues native invoices (PDF + email), and closes the loop with bank-statement
+reconciliation against real receivables — not just a Zoho status flag, since
+most B2B clients pay by direct NEFT/RTGS that never touches Zoho at all.
+Zoho Books push remains available as an optional delivery channel. Nothing is
+ever auto-approved — every extraction lands as a DRAFT commercial, and every
+payment match below full confidence lands in a human review queue.
 
 Built entirely offline — no external AI API cost. All extraction, billing
-calculation, and reporting runs locally.
+calculation, reconciliation, and reporting runs locally.
+
+## Order-to-cash cycle
+
+1. **Client sync** — bulk CSV import, manual entry, or a one-way pull from
+   your CRM's account export (CRM owns identity fields; this platform owns
+   billing data — see CRM Sync page).
+2. **Commercial capture** — agreement upload → offline OCR extraction →
+   review → lock (immutable version snapshot).
+3. **Monthly billing** — upload the three usage CSVs, the slab engine
+   computes GST/TDS and produces draft invoices.
+4. **Issue & deliver** — approve the draft, get a native PDF invoice with its
+   own numbering, email it (or push to Zoho as an optional channel).
+5. **Reconcile** — upload a bank statement (any bank's CSV export) or a
+   manual collections sheet; a five-tier matching engine auto-closes
+   high-confidence matches and queues the rest — including partial and
+   split payments — for one-click human confirmation.
+6. **Aging & follow-up** — receivables aging report, automatic overdue
+   reminders, dispute flag (pauses the aging clock), and credit notes.
+7. **Statement of account** — a running per-client ledger of every invoice
+   issued and payment received, available from the Clients page.
 
 ## Quick start
 

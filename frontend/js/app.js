@@ -11,6 +11,9 @@ const PAGES = [
   { id: 'commercials', label: 'Commercials', icon: 'fa-sliders' },
   { id: 'billing', label: 'Billing', icon: 'fa-file-invoice-dollar' },
   { id: 'invoices', label: 'Invoices', icon: 'fa-receipt' },
+  { id: 'receivables', label: 'Receivables', icon: 'fa-scale-balanced' },
+  { id: 'reconciliation', label: 'Reconciliation', icon: 'fa-money-check-dollar' },
+  { id: 'crm', label: 'CRM Sync', icon: 'fa-rotate' },
   { id: 'reports', label: 'Reports', icon: 'fa-chart-column' },
   { id: 'metrics', label: 'Metrics & Add-ons', icon: 'fa-layer-group' },
   { id: 'users', label: 'Users', icon: 'fa-users' },
@@ -197,8 +200,24 @@ async function renderClients(content) {
         <td>${esc(c.billing_frequency)}</td>
         <td><span class="badge ${c.commercial_status}">${c.commercial_status}</span></td>
         <td>${c.zoho_contact_id ? '<i class="fa-solid fa-check" style="color:var(--teal)"></i>' : `<i class="fa-solid fa-cloud zoho-create" style="cursor:pointer;color:var(--muted)" title="Create Zoho contact"></i>`}</td>
-        <td><i class="fa-solid fa-pen edit-client" style="cursor:pointer;margin-right:0.6rem"></i><i class="fa-solid fa-trash del-client" style="cursor:pointer;color:var(--danger)"></i></td>
+        <td><i class="fa-solid fa-file-invoice statement-client" style="cursor:pointer;margin-right:0.6rem" title="Statement of account"></i><i class="fa-solid fa-pen edit-client" style="cursor:pointer;margin-right:0.6rem"></i><i class="fa-solid fa-trash del-client" style="cursor:pointer;color:var(--danger)"></i></td>
       </tr>`).join('') || '<tr><td colspan="8" class="muted">No clients yet — add one to get started.</td></tr>';
+
+    content.querySelectorAll('.statement-client').forEach(el => el.addEventListener('click', async (e) => {
+      const id = e.target.closest('tr').dataset.id;
+      const s = await Apx.clientStatement(id);
+      const wrap = document.getElementById('client-form-wrap');
+      wrap.innerHTML = `
+        <div class="card">
+          <div class="flex-between"><h3>Statement — ${esc(s.client.name)}</h3><i class="fa-solid fa-xmark close-statement" style="cursor:pointer"></i></div>
+          <p>Billed: ${money(s.total_billed)} · Collected: ${money(s.total_collected)} · <strong>Outstanding: ${money(s.outstanding)}</strong></p>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Date</th><th>Type</th><th>Ref</th><th class="right">Debit</th><th class="right">Credit</th><th class="right">Balance</th></tr></thead>
+            <tbody>${s.entries.map(en => `<tr><td>${esc((en.date || '').slice(0, 10))}</td><td>${esc(en.type)}</td><td>${esc(en.ref)}</td><td class="right amount">${en.debit ? money(en.debit) : ''}</td><td class="right amount">${en.credit ? money(en.credit) : ''}</td><td class="right amount">${money(en.running_balance)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">No activity yet</td></tr>'}</tbody>
+          </table></div>
+        </div>`;
+      wrap.querySelector('.close-statement').addEventListener('click', () => wrap.innerHTML = '');
+    }));
 
     content.querySelectorAll('.zoho-create').forEach(el => el.addEventListener('click', async (e) => {
       const id = e.target.closest('tr').dataset.id;
@@ -595,10 +614,211 @@ async function renderInvoices(content) {
   const invoices = await Apx.listInvoices();
   content.innerHTML = `
     <div class="card"><div class="table-wrap"><table>
-      <thead><tr><th>Invoice No</th><th>Client</th><th>Period</th><th class="right">Subtotal</th><th class="right">GST</th><th class="right">TDS</th><th class="right">Total</th><th>Status</th></tr></thead>
-      <tbody>${invoices.map(i => `<tr><td>${esc(i.invoice_no)}</td><td>${esc(i.client_name)}</td><td>${esc(i.period)}</td><td class="right amount">${money(i.subtotal)}</td><td class="right amount">${money(i.gst)}</td><td class="right amount">${money(i.tds)}</td><td class="right amount">${money(i.total)}</td><td><span class="badge ${i.status}">${i.status}</span></td></tr>`).join('') || '<tr><td colspan="8" class="muted">No invoices yet</td></tr>'}</tbody>
+      <thead><tr><th>Invoice No</th><th>Client</th><th>Period</th><th class="right">Total</th><th class="right">Balance Due</th><th>Due</th><th>Status</th><th></th></tr></thead>
+      <tbody>${invoices.map(i => `
+        <tr data-id="${i.id}">
+          <td>${esc(i.invoice_no)}</td><td>${esc(i.client_name)}</td><td>${esc(i.period)}</td>
+          <td class="right amount">${money(i.total)}</td>
+          <td class="right amount">${money(i.balance_due)}</td>
+          <td>${esc(i.due_date || '—')}</td>
+          <td><span class="badge ${i.status}">${esc(i.status)}</span>${i.disputed ? ' <span class="badge draft">disputed</span>' : ''}</td>
+          <td>
+            ${i.status === 'draft' ? '<button class="ghost inv-issue">Issue</button>' : ''}
+            ${['issued', 'sent'].includes(i.status) ? '<button class="ghost inv-send">Send</button>' : ''}
+            <a class="btn ghost" href="${Apx.invoicePdfUrl(i.id)}" target="_blank">PDF</a>
+            ${!i.disputed && i.status !== 'paid' ? '<button class="ghost inv-dispute">Dispute</button>' : ''}
+            ${i.disputed ? '<button class="ghost inv-resolve">Resolve</button>' : ''}
+          </td>
+        </tr>`).join('') || '<tr><td colspan="8" class="muted">No invoices yet</td></tr>'}</tbody>
     </table></div></div>
   `;
+
+  content.querySelectorAll('.inv-issue').forEach(btn => btn.addEventListener('click', async (e) => {
+    const id = e.target.closest('tr').dataset.id;
+    try { await Apx.issueInvoice(id); toast('Invoice issued'); navigate('invoices'); }
+    catch (err) { toast(err.message, true); }
+  }));
+  content.querySelectorAll('.inv-send').forEach(btn => btn.addEventListener('click', async (e) => {
+    const id = e.target.closest('tr').dataset.id;
+    try { const r = await Apx.sendInvoice(id); toast(r.emailed ? 'Invoice emailed to client' : 'Marked sent (no SMTP configured — download the PDF to send manually)'); navigate('invoices'); }
+    catch (err) { toast(err.message, true); }
+  }));
+  content.querySelectorAll('.inv-dispute').forEach(btn => btn.addEventListener('click', async (e) => {
+    const id = e.target.closest('tr').dataset.id;
+    const reason = prompt('Reason for dispute?', '');
+    if (reason === null) return;
+    try { await Apx.disputeInvoice(id, true, reason); toast('Marked disputed — aging clock paused'); navigate('invoices'); }
+    catch (err) { toast(err.message, true); }
+  }));
+  content.querySelectorAll('.inv-resolve').forEach(btn => btn.addEventListener('click', async (e) => {
+    const id = e.target.closest('tr').dataset.id;
+    try { await Apx.disputeInvoice(id, false, ''); toast('Dispute resolved'); navigate('invoices'); }
+    catch (err) { toast(err.message, true); }
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Receivables — aging + reminders
+// ---------------------------------------------------------------------------
+
+const BUCKET_LABELS = { current: 'Current', '0_30': '1–30 days', '31_60': '31–60 days', '61_90': '61–90 days', '90_plus': '90+ days' };
+
+async function renderReceivables(content) {
+  const aging = await Apx.agingReport();
+  content.innerHTML = `
+    <div class="stat-grid">
+      ${Object.entries(aging.totals).map(([bucket, total]) => `<div class="stat-card"><div class="value">${money(total)}</div><div class="label">${BUCKET_LABELS[bucket]}</div></div>`).join('')}
+    </div>
+    <div class="card flex-between">
+      <div><h3 style="margin:0">Total Outstanding: ${money(aging.total_outstanding)}</h3></div>
+      <button id="run-reminders">Send Overdue Reminders</button>
+    </div>
+    ${Object.entries(aging.buckets).filter(([, rows]) => rows.length).map(([bucket, rows]) => `
+      <div class="card">
+        <h3>${BUCKET_LABELS[bucket]}</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Invoice</th><th>Client</th><th>Due</th><th class="right">Balance</th><th>Days Overdue</th></tr></thead>
+          <tbody>${rows.map(r => `<tr><td>${esc(r.invoice_no)}</td><td>${esc(r.client_name)}</td><td>${esc(r.due_date || '—')}</td><td class="right amount">${money(r.balance_due)}</td><td>${r.days_overdue ?? '—'}${r.disputed ? ' <span class="badge draft">disputed</span>' : ''}</td></tr>`).join('')}</tbody>
+        </table></div>
+      </div>`).join('') || '<div class="card"><p class="muted">Nothing outstanding.</p></div>'}
+    <div class="card">
+      <h3>Reminder Log</h3>
+      <div id="reminders-log" class="table-wrap"></div>
+    </div>
+  `;
+  document.getElementById('run-reminders').addEventListener('click', async () => {
+    try {
+      const r = await Apx.runReminders();
+      toast(`${r.sent.length} emailed, ${r.logged_only.length} logged (no SMTP / no contact email)`);
+      navigate('receivables');
+    } catch (e) { toast(e.message, true); }
+  });
+  const log = await Apx.remindersLog();
+  document.getElementById('reminders-log').innerHTML = `
+    <table><thead><tr><th>Invoice</th><th>Days Overdue</th><th>Channel</th><th>Sent</th></tr></thead>
+    <tbody>${log.map(r => `<tr><td>${esc(r.invoice_no)}</td><td>${r.days_overdue}</td><td>${esc(r.channel)}</td><td>${new Date(r.sent_at).toLocaleString()}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No reminders sent yet</td></tr>'}</tbody></table>`;
+}
+
+// ---------------------------------------------------------------------------
+// Reconciliation
+// ---------------------------------------------------------------------------
+
+async function renderReconciliation(content) {
+  const queue = await Apx.reconciliationQueue();
+  content.innerHTML = `
+    <div class="card">
+      <h3>Upload Bank Statement</h3>
+      <p class="muted">Any CSV export from your bank — date / narration / credit columns are detected automatically.</p>
+      <div class="actions-row">
+        <input type="file" id="stmt-file" accept=".csv" />
+        <button id="stmt-upload">Upload &amp; Reconcile</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Or Upload a Manual Collections Sheet</h3>
+      <p class="muted">Columns: enterprise_id, amount, date, mode, reference</p>
+      <div class="actions-row">
+        <input type="file" id="manual-file" accept=".csv" />
+        <button class="secondary" id="manual-upload">Upload</button>
+      </div>
+    </div>
+    <div id="recon-result"></div>
+    <div class="card">
+      <h3>Review Queue <span class="muted" style="font-size:0.8rem">(${queue.length} pending)</span></h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Date</th><th class="right">Amount</th><th>Narration / Client</th><th>Confidence</th><th>Match to</th><th></th></tr></thead>
+        <tbody id="queue-rows">${queue.map(p => `
+          <tr data-id="${p.id}">
+            <td>${esc(p.date || '—')}</td>
+            <td class="right amount">${money(p.amount)}</td>
+            <td>${esc(p.client_name || p.narration || '—')}</td>
+            <td><span class="badge draft">${esc(p.match_confidence || 'none')}</span></td>
+            <td>
+              <select class="q-invoice">
+                <option value="">— choose invoice —</option>
+                ${p.candidate_invoices.map(c => `<option value="${c.id}">${esc(c.invoice_no)} (${money(c.balance_due)})</option>`).join('')}
+              </select>
+            </td>
+            <td><button class="ghost q-confirm">Confirm</button><button class="ghost q-dismiss">Dismiss</button></td>
+          </tr>`).join('') || '<tr><td colspan="6" class="muted">Nothing pending review</td></tr>'}</tbody>
+      </table></div>
+    </div>
+  `;
+
+  document.getElementById('stmt-upload').addEventListener('click', async () => {
+    const file = document.getElementById('stmt-file').files[0];
+    if (!file) return toast('Choose a statement CSV first', true);
+    const fd = new FormData(); fd.append('file', file);
+    try {
+      const r = await Apx.uploadStatement(fd);
+      document.getElementById('recon-result').innerHTML = `<div class="card"><h3>Reconciled</h3><p>${r.auto_matched} auto-matched · ${r.queued} queued for review · ${r.unmatched} unidentified</p></div>`;
+      navigate('reconciliation');
+    } catch (e) { toast(e.message, true); }
+  });
+
+  document.getElementById('manual-upload').addEventListener('click', async () => {
+    const file = document.getElementById('manual-file').files[0];
+    if (!file) return toast('Choose a collections CSV first', true);
+    const fd = new FormData(); fd.append('file', file);
+    try {
+      const r = await Apx.manualCollectionsUpload(fd);
+      toast(`${r.auto_matched} matched, ${r.queued} queued, ${r.unmatched} unknown EnterpriseId`);
+      navigate('reconciliation');
+    } catch (e) { toast(e.message, true); }
+  });
+
+  content.querySelectorAll('.q-confirm').forEach(btn => btn.addEventListener('click', async (e) => {
+    const row = e.target.closest('tr');
+    const invoiceId = row.querySelector('.q-invoice').value;
+    if (!invoiceId) return toast('Pick an invoice to match', true);
+    try {
+      const r = await Apx.confirmMatch(row.dataset.id, Number(invoiceId));
+      toast(`Allocated ${money(r.allocated)}${r.remainder_queued ? ' — remainder re-queued' : ''}`);
+      navigate('reconciliation');
+    } catch (e2) { toast(e2.message, true); }
+  }));
+  content.querySelectorAll('.q-dismiss').forEach(btn => btn.addEventListener('click', async (e) => {
+    const row = e.target.closest('tr');
+    if (!confirm('Dismiss this receipt as unrelated to any invoice?')) return;
+    await Apx.dismissPayment(row.dataset.id);
+    toast('Dismissed');
+    navigate('reconciliation');
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// CRM Sync
+// ---------------------------------------------------------------------------
+
+async function renderCrm(content) {
+  const runs = await Apx.crmSyncRuns();
+  content.innerHTML = `
+    <div class="card">
+      <h3>Sync Clients from CRM</h3>
+      <p class="muted">The CRM stays the source of truth for name / GSTIN / state / contact — billing-specific fields here (frequency, commercials, invoices) are never overwritten by a sync. Export your CRM's accounts to CSV (<a href="${Apx.crmTemplateUrl()}">expected columns</a>) and upload it below.</p>
+      <div class="actions-row">
+        <input type="file" id="crm-file" accept=".csv" />
+        <button id="crm-sync-btn">Sync Now</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Sync History</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>When</th><th>Source</th><th>Created</th><th>Updated</th><th>By</th></tr></thead>
+        <tbody>${runs.map(r => `<tr><td>${new Date(r.run_at).toLocaleString()}</td><td>${esc(r.crm_source)}</td><td>${r.created}</td><td>${r.updated}</td><td>${esc(r.run_by)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">No syncs yet</td></tr>'}</tbody>
+      </table></div>
+    </div>
+  `;
+  document.getElementById('crm-sync-btn').addEventListener('click', async () => {
+    const file = document.getElementById('crm-file').files[0];
+    if (!file) return toast('Choose a CRM export CSV first', true);
+    const fd = new FormData(); fd.append('file', file);
+    try {
+      const r = await Apx.crmSync(fd, 'generic_csv');
+      toast(`${r.created} created, ${r.updated} updated`);
+      navigate('crm');
+    } catch (e) { toast(e.message, true); }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -736,6 +956,9 @@ const RENDERERS = {
   commercials: renderCommercials,
   billing: renderBilling,
   invoices: renderInvoices,
+  receivables: renderReceivables,
+  reconciliation: renderReconciliation,
+  crm: renderCrm,
   reports: renderReports,
   metrics: renderMetrics,
   users: renderUsers,

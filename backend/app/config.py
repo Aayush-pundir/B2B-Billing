@@ -18,6 +18,13 @@ class Settings:
         self.ORG_STATE_CODE = os.getenv("ORG_STATE_CODE", "09")
         self.INVOICE_PREFIX = os.getenv("INVOICE_PREFIX", "INV-")
         self.DEFAULT_GST_RATE = float(os.getenv("DEFAULT_GST_RATE", "18.0"))
+        self.PAYMENT_TERMS_DAYS = int(os.getenv("PAYMENT_TERMS_DAYS", "15"))
+
+        self.SMTP_HOST = os.getenv("SMTP_HOST", "")
+        self.SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+        self.SMTP_USER = os.getenv("SMTP_USER", "")
+        self.SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+        self.SMTP_FROM = os.getenv("SMTP_FROM", "")
 
         self.UPLOAD_DIR = os.getenv("UPLOAD_DIR", "./data/uploads")
 

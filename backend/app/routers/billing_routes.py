@@ -6,10 +6,11 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Agreement, BillingRun, Client, Commercial, Invoice, User
+from app.models import Agreement, BillingRun, Client, Commercial, CreditNote, Invoice, Payment, User
 from app.services import csv_parser, settings_store, zoho
 from app.services.auth import require_user, require_write
 from app.services.engine import compute_invoice
@@ -91,10 +92,13 @@ async def calculate_billing(
             continue
 
         invoice_no = _next_invoice_no(db, prefix)
+        terms_days = int(settings.get("PAYMENT_TERMS_DAYS", 15) or 15)
+        due_date = (datetime.date.today() + datetime.timedelta(days=terms_days)).isoformat()
         invoice = Invoice(
             run_id=run.id, client_id=client.id, invoice_no=invoice_no, period=period,
             lines=result["lines"], subtotal=result["subtotal"], gst_type=result["gst_type"],
             gst=result["gst"], tds=result["tds"], total=result["total"],
+            payment_terms_days=terms_days, due_date=due_date, balance_due=result["total"],
         )
         db.add(invoice)
 
@@ -181,7 +185,135 @@ def list_invoices(db: Session = Depends(get_db), user: User = Depends(require_us
             "client_name": client.name if client else "?", "enterprise_id": client.enterprise_id if client else "?",
             "subtotal": inv.subtotal, "gst_type": inv.gst_type, "gst": inv.gst, "tds": inv.tds,
             "total": inv.total, "status": inv.status, "zoho_invoice_id": inv.zoho_invoice_id,
+            "due_date": inv.due_date, "paid_amount": inv.paid_amount, "balance_due": inv.balance_due,
+            "disputed": inv.disputed,
         })
+    return out
+
+
+# --------------------------------------------------------------------------
+# Native invoice lifecycle — issue / send / PDF / dispute / credit note.
+# These never depend on Zoho: an invoice is a real, closable receivable
+# whether or not the org also pushes it to Zoho for delivery.
+# --------------------------------------------------------------------------
+
+def _invoice_or_404(db: Session, invoice_id: int) -> Invoice:
+    inv = db.query(Invoice).get(invoice_id)
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    return inv
+
+
+@router.post("/invoices/{invoice_id}/issue")
+def issue_invoice(invoice_id: int, db: Session = Depends(get_db), user: User = Depends(require_write("billing"))):
+    inv = _invoice_or_404(db, invoice_id)
+    if inv.status != "draft":
+        raise HTTPException(400, f"Invoice already {inv.status}")
+    inv.status = "issued"
+    inv.issued_at = datetime.datetime.utcnow()
+    if not inv.due_date:
+        inv.due_date = (datetime.date.today() + datetime.timedelta(days=inv.payment_terms_days or 15)).isoformat()
+    inv.balance_due = inv.total - inv.paid_amount
+    db.commit()
+    log_action(db, user, "invoice.issue", "invoice", inv.invoice_no)
+    return {"ok": True, "status": inv.status, "due_date": inv.due_date}
+
+
+@router.get("/invoices/{invoice_id}/pdf")
+def invoice_pdf(invoice_id: int, db: Session = Depends(get_db), user: User = Depends(require_user)):
+    from app.services.invoice_pdf import build_invoice_pdf
+
+    inv = _invoice_or_404(db, invoice_id)
+    client = db.query(Client).get(inv.client_id)
+    org = settings_store.get_all_settings(db)
+    pdf_bytes = build_invoice_pdf(org, client, inv)
+    return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf",
+                              headers={"Content-Disposition": f"attachment; filename={inv.invoice_no}.pdf"})
+
+
+@router.post("/invoices/{invoice_id}/send")
+def send_invoice(invoice_id: int, db: Session = Depends(get_db), user: User = Depends(require_write("billing"))):
+    from app.services.invoice_pdf import build_invoice_pdf
+    from app.services import mailer
+
+    inv = _invoice_or_404(db, invoice_id)
+    if inv.status == "draft":
+        raise HTTPException(400, "Issue the invoice before sending it")
+    client = db.query(Client).get(inv.client_id)
+    org = settings_store.get_all_settings(db)
+    emailed = False
+    if mailer.is_configured() and client.billing_contact_email:
+        pdf_bytes = build_invoice_pdf(org, client, inv)
+        body = (f"Dear {client.name},\n\nPlease find attached invoice {inv.invoice_no} for {inv.period}, "
+                f"amount due Rs. {inv.total:,.2f}, due on {inv.due_date}.\n\n{org.get('ORG_NAME')}")
+        emailed = mailer.send_email(client.billing_contact_email, f"Invoice {inv.invoice_no} — {org.get('ORG_NAME')}",
+                                     body, pdf_bytes, f"{inv.invoice_no}.pdf")
+    inv.status = "sent"
+    inv.sent_at = datetime.datetime.utcnow()
+    db.commit()
+    log_action(db, user, "invoice.send", "invoice", f"{inv.invoice_no} emailed={emailed}")
+    return {"ok": True, "emailed": emailed}
+
+
+class DisputeIn(BaseModel):
+    reason: str = ""
+    disputed: bool = True
+
+
+@router.put("/invoices/{invoice_id}/dispute")
+def dispute_invoice(invoice_id: int, payload: DisputeIn, db: Session = Depends(get_db), user: User = Depends(require_write("billing"))):
+    inv = _invoice_or_404(db, invoice_id)
+    inv.disputed = payload.disputed
+    inv.dispute_reason = payload.reason if payload.disputed else ""
+    if payload.disputed:
+        inv.status = "disputed"
+    db.commit()
+    log_action(db, user, "invoice.dispute", "invoice", f"{inv.invoice_no} disputed={payload.disputed}: {payload.reason}")
+    return {"ok": True}
+
+
+class CreditNoteIn(BaseModel):
+    amount: float
+    reason: str = ""
+
+
+@router.post("/invoices/{invoice_id}/credit-note")
+def credit_note(invoice_id: int, payload: CreditNoteIn, db: Session = Depends(get_db), user: User = Depends(require_write("billing"))):
+    inv = _invoice_or_404(db, invoice_id)
+    note = CreditNote(invoice_id=inv.id, amount=payload.amount, reason=payload.reason, created_by=user.email)
+    db.add(note)
+    inv.balance_due = max(0.0, inv.balance_due - payload.amount)
+    if inv.balance_due <= 0.01:
+        inv.status = "written_off" if payload.reason.lower().startswith("write") else "paid"
+    db.commit()
+    log_action(db, user, "invoice.credit_note", "invoice", f"{inv.invoice_no} amount={payload.amount} reason={payload.reason}")
+    return {"ok": True, "balance_due": inv.balance_due, "status": inv.status}
+
+
+@router.get("/invoices/{invoice_id}/credit-notes")
+def list_credit_notes(invoice_id: int, db: Session = Depends(get_db), user: User = Depends(require_user)):
+    rows = db.query(CreditNote).filter(CreditNote.invoice_id == invoice_id).all()
+    return [{"id": n.id, "amount": n.amount, "reason": n.reason, "created_by": n.created_by,
+             "created_at": n.created_at.isoformat()} for n in rows]
+
+
+@router.post("/reminders/run")
+def trigger_reminders(db: Session = Depends(get_db), user: User = Depends(require_write("billing"))):
+    from app.services.reminders import run_reminders
+    result = run_reminders(db)
+    log_action(db, user, "reminders.run", "invoice", f"sent={len(result['sent'])} logged={len(result['logged_only'])}")
+    return result
+
+
+@router.get("/reminders/log")
+def reminders_log(db: Session = Depends(get_db), user: User = Depends(require_user)):
+    from app.models import ReminderLog
+    rows = db.query(ReminderLog).order_by(ReminderLog.sent_at.desc()).limit(200).all()
+    out = []
+    for r in rows:
+        inv = db.query(Invoice).get(r.invoice_id)
+        out.append({"invoice_no": inv.invoice_no if inv else "?", "days_overdue": r.days_overdue,
+                     "template": r.template, "channel": r.channel, "sent_at": r.sent_at.isoformat()})
     return out
 
 

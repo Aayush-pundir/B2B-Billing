@@ -5,7 +5,10 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.models import Setting
 
-EDITABLE_KEYS = ["ORG_NAME", "ORG_GST", "ORG_STATE_CODE", "INVOICE_PREFIX", "DEFAULT_GST_RATE"]
+EDITABLE_KEYS = [
+    "ORG_NAME", "ORG_GST", "ORG_STATE_CODE", "INVOICE_PREFIX", "DEFAULT_GST_RATE",
+    "PAYMENT_TERMS_DAYS",
+]
 
 
 def _env_defaults() -> dict[str, str]:
@@ -16,6 +19,7 @@ def _env_defaults() -> dict[str, str]:
         "ORG_STATE_CODE": s.ORG_STATE_CODE,
         "INVOICE_PREFIX": s.INVOICE_PREFIX,
         "DEFAULT_GST_RATE": str(s.DEFAULT_GST_RATE),
+        "PAYMENT_TERMS_DAYS": str(s.PAYMENT_TERMS_DAYS),
     }
 
 

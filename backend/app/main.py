@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import get_settings
 from app.database import Base, engine, SessionLocal
 from app.models import Metric, Addon
-from app.routers import auth_routes, core_routes, agreement_routes, billing_routes
+from app.routers import auth_routes, core_routes, agreement_routes, billing_routes, reconciliation_routes, crm_routes
 
 settings = get_settings()
 
@@ -30,6 +30,8 @@ app.include_router(auth_routes.router)
 app.include_router(core_routes.router)
 app.include_router(agreement_routes.router)
 app.include_router(billing_routes.router)
+app.include_router(reconciliation_routes.router)
+app.include_router(crm_routes.router)
 
 DEFAULT_METRICS = [
     ("loading", "Loading (Add Money)", "amount"),

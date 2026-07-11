@@ -141,12 +141,106 @@ class Invoice(Base):
     gst = Column(Float, default=0.0)
     tds = Column(Float, default=0.0)
     total = Column(Float, default=0.0)
-    status = Column(String, default="draft")  # draft, pushed
+    # draft -> issued -> sent -> partially_paid -> paid ; or -> overdue / disputed / written_off
+    status = Column(String, default="draft")
     zoho_invoice_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=now)
 
+    payment_terms_days = Column(Integer, default=15)
+    due_date = Column(String, nullable=True)
+    issued_at = Column(DateTime, nullable=True)
+    sent_at = Column(DateTime, nullable=True)
+    paid_amount = Column(Float, default=0.0)
+    balance_due = Column(Float, default=0.0)
+    disputed = Column(Boolean, default=False)
+    dispute_reason = Column(String, default="")
+
     run = relationship("BillingRun", back_populates="invoices")
     client = relationship("Client")
+    payments = relationship("Payment", back_populates="invoice")
+    credit_notes = relationship("CreditNote", back_populates="invoice", cascade="all, delete-orphan")
+
+
+class Payment(Base):
+    __tablename__ = "payments"
+
+    id = Column(Integer, primary_key=True)
+    date = Column(String, nullable=False)
+    amount = Column(Float, nullable=False)
+    mode = Column(String, default="")  # NEFT, RTGS, UPI, cheque, other
+    reference = Column(String, default="")  # UTR / narration excerpt
+    narration = Column(String, default="")
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=True)
+    invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=True)
+    match_confidence = Column(String, default="")  # exact_reference, amount_client, amount_only, manual, none
+    matched_by = Column(String, default="")  # auto, manual
+    source = Column(String, default="bank_statement")  # bank_statement, manual_upload, zoho
+    import_id = Column(Integer, ForeignKey("bank_statement_imports.id"), nullable=True)
+    created_by = Column(String, default="")
+    created_at = Column(DateTime, default=now)
+
+    invoice = relationship("Invoice", back_populates="payments")
+    client = relationship("Client")
+
+
+class BankStatementImport(Base):
+    __tablename__ = "bank_statement_imports"
+
+    id = Column(Integer, primary_key=True)
+    file_name = Column(String, default="")
+    uploaded_by = Column(String, default="")
+    rows_parsed = Column(Integer, default=0)
+    rows_matched = Column(Integer, default=0)
+    date_from = Column(String, nullable=True)
+    date_to = Column(String, nullable=True)
+    uploaded_at = Column(DateTime, default=now)
+
+
+class CreditNote(Base):
+    __tablename__ = "credit_notes"
+
+    id = Column(Integer, primary_key=True)
+    invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=False)
+    amount = Column(Float, nullable=False)
+    reason = Column(String, default="")
+    created_by = Column(String, default="")
+    created_at = Column(DateTime, default=now)
+
+    invoice = relationship("Invoice", back_populates="credit_notes")
+
+
+class ReminderLog(Base):
+    __tablename__ = "reminders_log"
+
+    id = Column(Integer, primary_key=True)
+    invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=False)
+    days_overdue = Column(Integer, default=0)
+    template = Column(String, default="")
+    channel = Column(String, default="email")
+    sent_at = Column(DateTime, default=now)
+
+
+class ClientCrmLink(Base):
+    __tablename__ = "client_crm_links"
+
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, unique=True)
+    crm_source = Column(String, default="generic_csv")  # generic_csv, zoho_crm, hubspot, salesforce
+    crm_id = Column(String, default="")
+    last_synced_at = Column(DateTime, default=now)
+
+
+class CrmSyncRun(Base):
+    __tablename__ = "crm_sync_runs"
+
+    id = Column(Integer, primary_key=True)
+    crm_source = Column(String, default="generic_csv")
+    created_count = Column(Integer, default=0)
+    updated_count = Column(Integer, default=0)
+    skipped_count = Column(Integer, default=0)
+    detail = Column(JSON, default=list)
+    run_by = Column(String, default="")
+    run_at = Column(DateTime, default=now)
 
 
 class Setting(Base):

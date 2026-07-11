@@ -86,4 +86,27 @@ const Apx = {
   annualDueAlerts: (period) => request(`/api/billing/alerts/annual-due?period=${period}`),
   createZohoContact: (clientId) => request(`/api/billing/zoho/create-contact/${clientId}`, { method: 'POST' }),
   reportExportUrl: (kind) => `${API_BASE}/api/billing/reports/export?kind=${kind}`,
+
+  // invoice lifecycle (receivables)
+  issueInvoice: (id) => request(`/api/billing/invoices/${id}/issue`, { method: 'POST' }),
+  sendInvoice: (id) => request(`/api/billing/invoices/${id}/send`, { method: 'POST' }),
+  invoicePdfUrl: (id) => `${API_BASE}/api/billing/invoices/${id}/pdf`,
+  disputeInvoice: (id, disputed, reason) => request(`/api/billing/invoices/${id}/dispute`, { method: 'PUT', body: { disputed, reason } }),
+  creditNote: (id, amount, reason) => request(`/api/billing/invoices/${id}/credit-note`, { method: 'POST', body: { amount, reason } }),
+  clientStatement: (clientId) => request(`/api/clients/${clientId}/statement`),
+  runReminders: () => request('/api/billing/reminders/run', { method: 'POST' }),
+  remindersLog: () => request('/api/billing/reminders/log'),
+
+  // reconciliation
+  agingReport: () => request('/api/billing/receivables/aging'),
+  uploadStatement: (formData) => request('/api/billing/reconciliation/upload-statement', { method: 'POST', body: formData, isForm: true }),
+  manualCollectionsUpload: (formData) => request('/api/billing/reconciliation/manual-upload', { method: 'POST', body: formData, isForm: true }),
+  reconciliationQueue: () => request('/api/billing/reconciliation/queue'),
+  confirmMatch: (paymentId, invoiceId, amount) => request(`/api/billing/reconciliation/payments/${paymentId}/confirm`, { method: 'POST', body: { invoice_id: invoiceId, amount } }),
+  dismissPayment: (paymentId) => request(`/api/billing/reconciliation/payments/${paymentId}/dismiss`, { method: 'POST' }),
+
+  // CRM sync
+  crmSync: (formData, source) => request(`/api/crm/sync?source=${source}`, { method: 'POST', body: formData, isForm: true }),
+  crmSyncRuns: () => request('/api/crm/sync-runs'),
+  crmTemplateUrl: () => `${API_BASE}/api/crm/template`,
 };
