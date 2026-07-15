@@ -41,8 +41,8 @@ calculation, reconciliation, and reporting runs locally.
 START.bat           # Windows
 ```
 
-This installs backend dependencies, starts the FastAPI backend on
-`http://localhost:8502`, and serves the frontend on `http://localhost:8501`.
+One process, one port: `http://localhost:8000` serves both the API and the
+frontend — there is no separate frontend server to run.
 
 First run copies `backend/.env.example` to `backend/.env` — edit it to add
 real org GST details, OAuth credentials, or Zoho Books credentials. Everything
@@ -53,10 +53,33 @@ Sign in with the dev-login screen — pick a role (admin/accounts/finance/
 sales/viewer) and any email. The first login using `BOOTSTRAP_ADMIN_EMAIL`
 (default `admin@example.local`) becomes admin automatically.
 
+## Deploying (Render)
+
+The repo includes a `Dockerfile` and `render.yaml` blueprint — it builds and
+serves the whole app (frontend + API) as a single web service:
+
+1. Push this repo to GitHub (already done if you're reading this from there).
+2. On [render.com](https://render.com): **New** → **Blueprint** → connect
+   this repo. Render reads `render.yaml` and creates the service automatically.
+3. First deploy takes a few minutes; you'll get a public `onrender.com` URL
+   serving the app.
+
+**Data persistence note:** Render's free web-service plan has an ephemeral
+filesystem — the SQLite database and uploaded agreements are wiped on every
+deploy or restart. Fine for a first look. For anything real, either attach a
+persistent Disk (needs a paid instance type) at `/app/data`, or point
+`DATABASE_URL` at a managed Postgres instance instead (Render offers one;
+no code change needed, see below).
+
+`Procfile` is included as a fallback for buildpack-based hosts (Railway,
+Heroku) that don't use the Dockerfile directly.
+
 ## Architecture
 
 - **Backend** — Python FastAPI (`backend/app`), SQLAlchemy models, business
-  logic in `services/`.
+  logic in `services/`. Also serves the frontend as static files
+  (`app.mount("/", StaticFiles(...))` in `main.py`) — one process, one port,
+  no CORS to configure.
 - **Frontend** — Vanilla JS + CSS single-page app (`frontend/`), no build step.
 - **Database** — SQLite by default (`backend/data/billing.db`). Set
   `DATABASE_URL=postgresql://...` in `.env` to upgrade to Postgres — no code

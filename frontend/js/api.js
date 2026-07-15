@@ -1,4 +1,6 @@
-const API_BASE = window.location.protocol + '//' + window.location.hostname + ':8502';
+// Frontend is served by the same FastAPI process as the API — same origin,
+// same port, no CORS involved. Relative paths only.
+const API_BASE = '';
 
 async function request(path, { method = 'GET', body, isForm = false } = {}) {
   const opts = { method, credentials: 'include', headers: {} };

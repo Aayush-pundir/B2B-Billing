@@ -1,7 +1,8 @@
 import os
+from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.database import Base, engine, SessionLocal
@@ -18,23 +19,19 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="B2B Billing Automation Platform", version="1.0")
 
-app.add_middleware(
-    CORSMiddleware,
-    # allow_origins=["*"] is rejected by browsers once allow_credentials=True
-    # (the cb_token auth cookie requires it) — a regex reflects the calling
-    # origin instead, keeping any localhost/127.0.0.1 port working in dev.
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+# Frontend and backend are one deployable unit: the SPA is served straight
+# off disk by this same process, on this same port. No CORS layer needed —
+# there is no second origin anymore.
 app.include_router(auth_routes.router)
 app.include_router(core_routes.router)
 app.include_router(agreement_routes.router)
 app.include_router(billing_routes.router)
 app.include_router(reconciliation_routes.router)
 app.include_router(crm_routes.router)
+
+FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
+if FRONTEND_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 
 DEFAULT_METRICS = [
     ("loading", "Loading (Add Money)", "amount"),
