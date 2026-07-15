@@ -20,7 +20,10 @@ app = FastAPI(title="B2B Billing Automation Platform", version="1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    # allow_origins=["*"] is rejected by browsers once allow_credentials=True
+    # (the cb_token auth cookie requires it) — a regex reflects the calling
+    # origin instead, keeping any localhost/127.0.0.1 port working in dev.
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
