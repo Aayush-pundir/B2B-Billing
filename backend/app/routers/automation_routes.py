@@ -52,12 +52,12 @@ def put_automation(payload: PolicyIn, db: Session = Depends(get_db), user: User 
 
 
 class RunNowIn(BaseModel):
-    steps: list[str] = ["run", "dunning", "credit"]
+    steps: list[str] = ["run", "recurring", "dunning", "credit"]
 
 
 @router.post("/automation/run-now")
 def run_now(payload: RunNowIn, db: Session = Depends(get_db), user: User = Depends(require_write("automation"))):
-    steps = tuple(s for s in payload.steps if s in ("run", "dunning", "credit"))
+    steps = tuple(s for s in payload.steps if s in ("run", "recurring", "dunning", "credit"))
     result = scheduler.tick(db, steps=steps)
     log_action(db, user, "automation.run_now", "automation", ",".join(steps))
     return result

@@ -36,7 +36,7 @@ def previous_period(today: datetime.date) -> str:
     return last_month.strftime("%Y-%m")
 
 
-def tick(db, today: datetime.date | None = None, steps: tuple[str, ...] = ("run", "dunning", "credit")) -> dict:
+def tick(db, today: datetime.date | None = None, steps: tuple[str, ...] = ("run", "recurring", "dunning", "credit")) -> dict:
     from app.routers.billing_routes import RunExists, run_from_database  # lazy: avoids an import cycle
 
     today = today or datetime.date.today()
@@ -64,6 +64,13 @@ def tick(db, today: datetime.date | None = None, steps: tuple[str, ...] = ("run"
                 step["outcome"] = f"failed: {exc}"
                 _log(db, "automation.run_failed", f"{period}: {exc}")
         result["steps"]["run"] = step
+
+    if "recurring" in steps:
+        from app.services import sales
+        made = [o for o in sales.run_recurring(db, today) if "invoice_no" in o]
+        result["steps"]["recurring"] = {"generated": len(made), "invoices": [m["invoice_no"] for m in made]}
+        if made:
+            _log(db, "automation.recurring", f"generated {len(made)}: {', '.join(m['invoice_no'] for m in made)}")
 
     if "dunning" in steps:
         out = reminders.run_reminders(db, today)

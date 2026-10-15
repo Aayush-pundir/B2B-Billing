@@ -24,11 +24,12 @@ def build_invoice_pdf(org: dict, client, invoice) -> bytes:
 
     pdf.set_font("Helvetica", "B", 13)
     pdf.set_text_color(30, 30, 30)
-    pdf.cell(0, 8, f"Invoice {invoice.invoice_no}", ln=True)
+    title = {"debit_note": "Debit Note", "quote": "Quotation"}.get(getattr(invoice, "doc_type", "invoice"), "Invoice")
+    pdf.cell(0, 8, f"{title} {invoice.invoice_no}", ln=True)
     pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(80, 80, 80)
     pdf.cell(0, 5, f"Period: {invoice.period}", ln=True)
-    pdf.cell(0, 5, f"Due date: {invoice.due_date or '-'}", ln=True)
+    pdf.cell(0, 5, f"{'Validity' if title == 'Quotation' else 'Due date'}: {invoice.due_date or '-'}", ln=True)
     pdf.ln(3)
 
     pdf.set_font("Helvetica", "B", 10)

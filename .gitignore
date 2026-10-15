@@ -6,3 +6,10 @@ backend/data/
 data/
 *.db
 .DS_Store
+
+# Confidential billing data (see BILLING_SYSTEM_SPEC.md) — never commit customer commercials
+customer_rules*.jsonl
+periodic_register*.csv
+exceptions_*.csv
+*Rulebook*CONFIDENTIAL*.xlsx
+Revenue Sheet*.xlsx

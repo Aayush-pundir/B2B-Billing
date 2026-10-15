@@ -14,9 +14,9 @@ ROLES = ["admin", "accounts", "finance", "sales", "viewer"]
 # manual entry, import from a reviewed agreement, or bulk Excel upload. Admin
 # manages users and system settings but deliberately cannot change terms.
 ROLE_WRITE_ACCESS = {
-    "admin": {"clients", "agreements", "settings", "users", "metrics", "addons", "datasource", "automation"},
-    "accounts": {"clients", "agreements", "billing", "credit"},
-    "finance": {"clients", "agreements", "billing", "commercials", "metrics", "addons", "approvals", "automation", "credit"},
+    "admin": {"clients", "agreements", "settings", "users", "metrics", "addons", "datasource", "automation", "items"},
+    "accounts": {"clients", "agreements", "billing", "credit", "items", "sales"},
+    "finance": {"clients", "agreements", "billing", "commercials", "metrics", "addons", "approvals", "automation", "credit", "items", "sales", "purchases", "accounting"},
     "sales": set(),
     "viewer": set(),
 }
@@ -86,3 +86,15 @@ def require_any_write(*entities: str):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Role '{user.role}' cannot access this")
         return user
     return checker
+
+
+def require_roles(*roles: str):
+    """Read access for finance data (ledger, purchases, reports) — not for sales/viewer roles."""
+    def checker(user: User = Depends(require_user)) -> User:
+        if user.role not in roles:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Role '{user.role}' cannot view this")
+        return user
+    return checker
+
+
+FINANCE_READERS = ("admin", "finance", "accounts")

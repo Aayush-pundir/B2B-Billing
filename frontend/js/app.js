@@ -7,14 +7,19 @@ const state = { user: null, route: 'dashboard' };
 const PAGES = [
   { id: 'dashboard', label: 'Dashboard', icon: 'fa-gauge', group: 'Overview', sub: 'Your billing pipeline at a glance' },
   { id: 'clients', label: 'Customers', icon: 'fa-building', group: 'Setup', sub: 'Customer master data — identity, tax, contacts and billing preferences' },
+  { id: 'items', label: 'Items', icon: 'fa-box', group: 'Setup', sub: 'Products and services you sell — HSN/SAC, rate and GST' },
   { id: 'agreements', label: 'Agreements', icon: 'fa-file-lines', group: 'Setup', sub: 'Upload contracts and extract commercial terms' },
   { id: 'commercials', label: 'Commercials', icon: 'fa-sliders', group: 'Setup', sub: 'Billing terms — amended by Finance only, via manual entry, agreements or Excel' },
   { id: 'billing', label: 'Billing', icon: 'fa-file-invoice-dollar', group: 'Billing', sub: 'Run the monthly billing cycle from live usage data' },
+  { id: 'sales', label: 'Sales documents', icon: 'fa-file-circle-plus', group: 'Billing', sub: 'Ad-hoc invoices, quotes, recurring invoices, debit notes and receipts' },
   { id: 'invoices', label: 'Invoices', icon: 'fa-receipt', group: 'Billing', sub: 'Issue, send and track invoices' },
+  { id: 'purchases', label: 'Purchases', icon: 'fa-cart-shopping', group: 'Purchases', sub: 'Vendors, bills and payments' },
   { id: 'receivables', label: 'Receivables', icon: 'fa-scale-balanced', group: 'Collections', sub: 'Outstanding balances and aging' },
   { id: 'reconciliation', label: 'Reconciliation', icon: 'fa-money-check-dollar', group: 'Collections', sub: 'Match bank payments to invoices' },
   { id: 'credit', label: 'Credit & forecast', icon: 'fa-gauge-high', group: 'Collections', sub: 'Exposure, credit limits and expected collections' },
   { id: 'crm', label: 'CRM Sync', icon: 'fa-rotate', group: 'Collections', sub: 'Keep client identity in sync with your CRM' },
+  { id: 'accounting', label: 'Accounting', icon: 'fa-book', group: 'Accounting', sub: 'Chart of accounts, journals, ledger and period lock' },
+  { id: 'finreports', label: 'Financial reports', icon: 'fa-chart-pie', group: 'Accounting', sub: 'Trial balance, P&L, balance sheet, aging and GST' },
   { id: 'reports', label: 'Reports', icon: 'fa-chart-column', group: 'Insights', sub: 'Export billing and collections reports' },
   { id: 'metrics', label: 'Metrics & Add-ons', icon: 'fa-layer-group', group: 'Insights', sub: 'Usage metrics and add-on line items' },
   { id: 'automation', label: 'Automation', icon: 'fa-robot', group: 'Admin', sub: 'Approvals, scheduled runs, reminders and credit rules' },
@@ -1393,5 +1398,6 @@ const RENDERERS = {
   audit: renderAudit,
   settings: renderSettings,
 };
+Object.assign(RENDERERS, MODULE_RENDERERS);
 
 boot();

@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from pydantic import BaseModel
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -51,7 +52,8 @@ def _generate_run(db: Session, user, period: str, tds_rate: float, confirm_ids: 
     """Shared by the database pull, the CSV fallback and the scheduler: turn
     per-client usage into draft invoices using each client's locked terms, run
     the anomaly checks, then route the run through the approval policy."""
-    existing = db.query(BillingRun).filter(BillingRun.period == period, BillingRun.status != "rejected").first()
+    existing = db.query(BillingRun).filter(BillingRun.period == period, BillingRun.status != "rejected",
+                                           or_(BillingRun.trigger.is_(None), BillingRun.trigger != "adhoc")).first()
     if existing and not force:
         raise RunExists(f"A billing run for {period} already exists (run #{existing.id}, {existing.status}).")
     clients = db.query(Client).all()

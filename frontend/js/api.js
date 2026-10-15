@@ -100,6 +100,50 @@ const Apx = {
   createZohoContact: (clientId) => request(`/api/billing/zoho/create-contact/${clientId}`, { method: 'POST' }),
   reportExportUrl: (kind) => `${API_BASE}/api/billing/reports/export?kind=${kind}`,
 
+  // items
+  listItems: () => request('/api/items'),
+  saveItem: (id, data) => id ? request(`/api/items/${id}`, { method: 'PUT', body: data }) : request('/api/items', { method: 'POST', body: data }),
+  deleteItem: (id) => request(`/api/items/${id}`, { method: 'DELETE' }),
+
+  // sales documents
+  previewDoc: (clientId, lines) => request('/api/sales/preview', { method: 'POST', body: { client_id: clientId, lines } }),
+  createInvoiceDoc: (data) => request('/api/sales/invoices', { method: 'POST', body: data }),
+  createDebitNote: (data) => request('/api/sales/debit-notes', { method: 'POST', body: data }),
+  listDocs: () => request('/api/sales/documents'),
+  writeOff: (id, reason) => request(`/api/sales/invoices/${id}/write-off`, { method: 'POST', body: { reason } }),
+  recordReceipt: (data) => request('/api/sales/receipts', { method: 'POST', body: data }),
+  listAdvances: () => request('/api/sales/advances'),
+  listQuotes: () => request('/api/sales/quotes'),
+  createQuote: (data) => request('/api/sales/quotes', { method: 'POST', body: data }),
+  setQuoteStatus: (id, status) => request(`/api/sales/quotes/${id}/status`, { method: 'PUT', body: { status } }),
+  convertQuote: (id) => request(`/api/sales/quotes/${id}/convert`, { method: 'POST' }),
+  quotePdfUrl: (id) => `${API_BASE}/api/sales/quotes/${id}/pdf`,
+  listRecurring: () => request('/api/sales/recurring'),
+  createRecurring: (data) => request('/api/sales/recurring', { method: 'POST', body: data }),
+  setRecurringStatus: (id, status) => request(`/api/sales/recurring/${id}/status`, { method: 'PUT', body: { status } }),
+  runRecurring: () => request('/api/sales/recurring/run', { method: 'POST' }),
+
+  // purchases
+  listVendors: () => request('/api/purchases/vendors'),
+  saveVendor: (id, data) => id ? request(`/api/purchases/vendors/${id}`, { method: 'PUT', body: data }) : request('/api/purchases/vendors', { method: 'POST', body: data }),
+  listBills: () => request('/api/purchases/bills'),
+  createBill: (data) => request('/api/purchases/bills', { method: 'POST', body: data }),
+  voidBill: (id) => request(`/api/purchases/bills/${id}/void`, { method: 'POST' }),
+  payBill: (id, data) => request(`/api/purchases/bills/${id}/pay`, { method: 'POST', body: data }),
+
+  // accounting + reports
+  listAccounts: () => request('/api/finance/accounts'),
+  saveAccount: (id, data) => id ? request(`/api/finance/accounts/${id}`, { method: 'PUT', body: data }) : request('/api/finance/accounts', { method: 'POST', body: data }),
+  listJournals: () => request('/api/finance/journals'),
+  createJournal: (data) => request('/api/finance/journals', { method: 'POST', body: data }),
+  reverseJournal: (id) => request(`/api/finance/journals/${id}/reverse`, { method: 'POST' }),
+  getLock: () => request('/api/finance/lock'),
+  setLock: (date) => request('/api/finance/lock', { method: 'PUT', body: { date } }),
+  ledger: (account, start, end) => request(`/api/finance/ledger?account=${account}&start=${start}&end=${end}`),
+  finReport: (path, qs) => request(`/api/finance/reports/${path}${qs ? '?' + qs : ''}`),
+  gstExportUrl: (start, end) => `${API_BASE}/api/finance/reports/gst/export?start=${start}&end=${end}`,
+  integrity: () => request('/api/finance/integrity'),
+
   // approvals
   approveRun: (id, acknowledgeHigh) => request(`/api/billing/runs/${id}/approve`, { method: 'POST', body: { acknowledge_high: acknowledgeHigh } }),
   rejectRun: (id, reason) => request(`/api/billing/runs/${id}/reject`, { method: 'POST', body: { reason } }),

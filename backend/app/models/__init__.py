@@ -195,6 +195,12 @@ class Invoice(Base):
     disputed = Column(Boolean, default=False)
     dispute_reason = Column(String, default="")
 
+    # document kind: invoice | debit_note ; source: usage | adhoc | recurring | quote | debit_note
+    doc_type = Column(String, default="invoice")
+    source = Column(String, default="usage")
+    parent_invoice_id = Column(Integer, nullable=True)
+    po_number = Column(String, default="")
+
     # customer portal / pay link
     public_token = Column(String, nullable=True, index=True)
     promise_date = Column(String, nullable=True)  # customer's "I will pay on" date
@@ -306,3 +312,169 @@ class AuditLog(Base):
     entity = Column(String, default="")
     detail = Column(Text, default="")
     ts = Column(DateTime, default=now)
+
+
+# --------------------------------------------------------------------------
+# Phase 3 — items, sales documents, purchases, accounting
+# --------------------------------------------------------------------------
+
+class Item(Base):
+    __tablename__ = "items"
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String, unique=True, nullable=False)
+    name = Column(String, nullable=False)
+    item_type = Column(String, default="service")  # service, goods
+    hsn_sac = Column(String, default="")
+    unit = Column(String, default="nos")
+    rate = Column(Float, default=0.0)
+    gst_rate = Column(Float, default=18.0)
+    revenue_account = Column(String, default="4000")
+    description = Column(String, default="")
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=now)
+
+
+class Account(Base):
+    __tablename__ = "accounts"
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String, unique=True, nullable=False)
+    name = Column(String, nullable=False)
+    type = Column(String, nullable=False)  # asset, liability, equity, income, expense
+    system = Column(Boolean, default=False)  # system accounts are used by auto-posting and cannot be deleted
+    active = Column(Boolean, default=True)
+    description = Column(String, default="")
+
+
+class JournalEntry(Base):
+    __tablename__ = "journal_entries"
+
+    id = Column(Integer, primary_key=True)
+    date = Column(String, nullable=False)  # YYYY-MM-DD
+    memo = Column(String, default="")
+    ref = Column(String, default="")
+    kind = Column(String, default="manual")  # manual, opening, reversal
+    reverses_id = Column(Integer, nullable=True)
+    created_by = Column(String, default="")
+    created_at = Column(DateTime, default=now)
+
+    lines = relationship("JournalLine", back_populates="entry", cascade="all, delete-orphan")
+
+
+class JournalLine(Base):
+    __tablename__ = "journal_lines"
+
+    id = Column(Integer, primary_key=True)
+    entry_id = Column(Integer, ForeignKey("journal_entries.id"), nullable=False)
+    account_code = Column(String, nullable=False)
+    debit = Column(Float, default=0.0)
+    credit = Column(Float, default=0.0)
+    note = Column(String, default="")
+
+    entry = relationship("JournalEntry", back_populates="lines")
+
+
+class Vendor(Base):
+    __tablename__ = "vendors"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    gst = Column(String, default="")
+    pan = Column(String, default="")
+    state = Column(String, default="")
+    state_code = Column(String, default="")
+    email = Column(String, default="")
+    phone = Column(String, default="")
+    address = Column(String, default="")
+    payment_terms_days = Column(Integer, default=30)
+    tds_section = Column(String, default="")  # e.g. 194C, 194J
+    bank_account = Column(String, default="")
+    ifsc = Column(String, default="")
+    status = Column(String, default="active")
+    notes = Column(Text, default="")
+    created_at = Column(DateTime, default=now)
+
+
+class Bill(Base):
+    __tablename__ = "bills"
+
+    id = Column(Integer, primary_key=True)
+    vendor_id = Column(Integer, ForeignKey("vendors.id"), nullable=False)
+    bill_no = Column(String, nullable=False)  # the vendor's own invoice number
+    date = Column(String, nullable=False)
+    due_date = Column(String, nullable=True)
+    lines = Column(JSON, default=list)  # [{description, account_code, amount, gst_rate, hsn_sac}]
+    subtotal = Column(Float, default=0.0)
+    gst_type = Column(String, default="CGST_SGST")
+    gst = Column(Float, default=0.0)
+    itc_eligible = Column(Boolean, default=True)  # input tax credit claimable
+    tds = Column(Float, default=0.0)
+    total = Column(Float, default=0.0)  # payable to the vendor = subtotal + gst - tds
+    paid_amount = Column(Float, default=0.0)
+    balance_due = Column(Float, default=0.0)
+    status = Column(String, default="open")  # open, partially_paid, paid, void
+    notes = Column(String, default="")
+    created_by = Column(String, default="")
+    created_at = Column(DateTime, default=now)
+
+    vendor = relationship("Vendor")
+    payments = relationship("BillPayment", back_populates="bill")
+
+
+class BillPayment(Base):
+    __tablename__ = "bill_payments"
+
+    id = Column(Integer, primary_key=True)
+    bill_id = Column(Integer, ForeignKey("bills.id"), nullable=False)
+    date = Column(String, nullable=False)
+    amount = Column(Float, nullable=False)
+    mode = Column(String, default="NEFT")
+    reference = Column(String, default="")
+    created_by = Column(String, default="")
+    created_at = Column(DateTime, default=now)
+
+    bill = relationship("Bill", back_populates="payments")
+
+
+class Quote(Base):
+    __tablename__ = "quotes"
+
+    id = Column(Integer, primary_key=True)
+    quote_no = Column(String, nullable=False)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
+    date = Column(String, nullable=False)
+    valid_until = Column(String, nullable=True)
+    lines = Column(JSON, default=list)
+    subtotal = Column(Float, default=0.0)
+    gst_type = Column(String, default="IGST")
+    gst = Column(Float, default=0.0)
+    total = Column(Float, default=0.0)
+    status = Column(String, default="draft")  # draft, sent, accepted, declined, invoiced
+    notes = Column(String, default="")
+    invoice_id = Column(Integer, nullable=True)  # set when converted
+    created_by = Column(String, default="")
+    created_at = Column(DateTime, default=now)
+
+    client = relationship("Client")
+
+
+class RecurringInvoice(Base):
+    __tablename__ = "recurring_invoices"
+
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
+    name = Column(String, default="")
+    lines = Column(JSON, default=list)
+    frequency = Column(String, default="monthly")  # monthly, quarterly, half_yearly, annual
+    start_date = Column(String, nullable=False)
+    next_date = Column(String, nullable=False)
+    end_date = Column(String, nullable=True)
+    auto_issue = Column(Boolean, default=True)
+    status = Column(String, default="active")  # active, paused, ended
+    generated_count = Column(Integer, default=0)
+    last_generated = Column(String, nullable=True)
+    created_by = Column(String, default="")
+    created_at = Column(DateTime, default=now)
+
+    client = relationship("Client")

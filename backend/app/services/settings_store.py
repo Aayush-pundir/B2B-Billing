@@ -10,6 +10,7 @@ EDITABLE_KEYS = [
     "PAYMENT_TERMS_DAYS",
     # customer portal / pay details
     "PUBLIC_BASE_URL", "BANK_NAME", "BANK_ACCOUNT_NO", "BANK_IFSC", "UPI_ID",
+    "DEFAULT_SAC",
 ]
 
 # Policy knobs for approvals, scheduling, dunning and credit control. Managed on
@@ -60,7 +61,7 @@ def _env_defaults() -> dict[str, str]:
         "INVOICE_PREFIX": s.INVOICE_PREFIX,
         "DEFAULT_GST_RATE": str(s.DEFAULT_GST_RATE),
         "PAYMENT_TERMS_DAYS": str(s.PAYMENT_TERMS_DAYS),
-        "PUBLIC_BASE_URL": "", "BANK_NAME": "", "BANK_ACCOUNT_NO": "", "BANK_IFSC": "", "UPI_ID": "",
+        "PUBLIC_BASE_URL": "", "BANK_NAME": "", "BANK_ACCOUNT_NO": "", "BANK_IFSC": "", "UPI_ID": "", "DEFAULT_SAC": "998314",
     }
 
 
@@ -89,3 +90,20 @@ def update_settings(db: Session, values: dict[str, str]) -> dict[str, str]:
             row.value = str(value)
     db.commit()
     return get_all_settings(db)
+
+
+LOCK_KEY = "BOOKS_LOCK_DATE"
+
+
+def get_lock_date(db: Session) -> str:
+    row = db.query(Setting).filter(Setting.key == LOCK_KEY).first()
+    return row.value if row and row.value else ""
+
+
+def set_lock_date(db: Session, value: str) -> None:
+    row = db.query(Setting).filter(Setting.key == LOCK_KEY).first()
+    if row is None:
+        db.add(Setting(key=LOCK_KEY, value=value))
+    else:
+        row.value = value
+    db.commit()

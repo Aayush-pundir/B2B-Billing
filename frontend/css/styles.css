@@ -397,6 +397,23 @@ code { background: var(--surface-hover); padding: .05rem .35rem; border-radius: 
 .meter span { display: block; height: 100%; background: var(--ok); border-radius: 99px; } .meter span.warn { background: var(--warn); } .meter span.bad { background: var(--danger); }
 @media (max-width: 960px) { .grid-2 { grid-template-columns: 1fr; } }
 
+/* Phase 3: documents, ledger, reports */
+.line-row { display: grid; grid-template-columns: 1.3fr 1.6fr .5fr .7fr .6fr 28px; gap: .5rem; align-items: center; margin-bottom: .5rem; }
+.line-row.bill-row { grid-template-columns: 1.6fr 1.6fr .9fr .5fr 28px; } .line-row.je-row { grid-template-columns: 2fr .8fr .8fr 1.2fr 28px; }
+.line-row input, .line-row select { width: 100%; min-width: 0; }
+.l-rm { cursor: pointer; color: var(--danger); text-align: center; opacity: .8; } .l-rm:hover { opacity: 1; }
+.doc-total { margin: 1rem 0 0 auto; width: min(100%, 320px); font-size: .9rem; }
+.doc-total > div { display: flex; justify-content: space-between; padding: .25rem 0; gap: 1rem; }
+.doc-total .grand { border-top: 1px solid var(--border); margin-top: .3rem; padding-top: .5rem; font-size: 1.02rem; }
+.doc-total .grand.ok b { color: var(--ok); } .doc-total .grand.bad b { color: var(--danger); }
+tr.total-row td { font-weight: 700; background: var(--surface-2); border-top: 1px solid var(--border-strong); }
+.je { border: 1px solid var(--border); border-radius: var(--radius); padding: .8rem 1rem; margin-bottom: .8rem; background: var(--surface-2); }
+.integrity.ok { border-color: color-mix(in srgb, var(--ok) 45%, transparent); } .integrity.bad { border-color: color-mix(in srgb, var(--danger) 55%, transparent); background: var(--danger-soft); }
+.integrity .checks { display: grid; gap: .3rem; font-size: .84rem; } .integrity .checks i.fa-circle-check { color: var(--ok); } .integrity .checks i.fa-circle-xmark { color: var(--danger); }
+.integrity h3 { margin: 0; } .integrity.ok h3 i { color: var(--ok); }
+h4 { font-family: 'Geist', sans-serif; font-size: .78rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 1.1rem 0 .4rem; }
+@media (max-width: 760px) { .line-row, .line-row.bill-row, .line-row.je-row { grid-template-columns: 1fr 1fr; } .l-rm { grid-column: span 2; } }
+
 /* ---------- Responsive ---------- */
 @media (max-width: 960px) {
   .login-wrap { grid-template-columns: 1fr; } .login-hero { display: none; }

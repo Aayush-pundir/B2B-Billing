@@ -18,7 +18,7 @@ doesn't own your usage data. Ordered by value to this business, not by Zoho's me
 4. **Customer portal / pay links:** public per-invoice link — invoice, PDF, bank + UPI details with QR, promise-to-pay date, raise a query.
 5. **Credit control:** exposure vs limit, auto-block/unblock on overdue days, collections forecast from each customer's real payment delay.
 
-## Phase 3 — Zoho Books parity
+## Phase 3 — Zoho Books parity (first slice DONE: items, quotes, recurring/ad-hoc invoices, debit notes, receipts/advances, write-offs, vendors & bills, chart of accounts, derived double-entry ledger, journals, period lock, trial balance / P&L / balance sheet / aging / GST + GSTR-1 export, integrity checks)
 - **Sales:** quotes/estimates, sales orders, recurring invoices, proforma, delivery challans, debit notes, advance receipts & retainers, customer credits applied to invoices, write-offs.
 - **Purchases (AP):** vendors, bills, vendor credits, purchase orders, payments made, expense claims, recurring bills.
 - **Accounting:** chart of accounts, manual journals, opening balances, multi-currency with exchange-rate gains/losses, bank feeds + rules, period locking, fixed assets.
