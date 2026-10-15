@@ -105,21 +105,10 @@ def extract_agreement(agreement_id: int, db: Session = Depends(get_db), user: Us
     agreement.extracted_json = result
     db.commit()
 
-    commercial = db.query(Commercial).filter(Commercial.client_id == agreement.client_id).first()
-    if commercial is None:
-        commercial = Commercial(client_id=agreement.client_id)
-        db.add(commercial)
-    if commercial.status != "locked":
-        commercial.rules = result["rules"]
-        commercial.status = "draft"
-        db.commit()
-        db.refresh(commercial)
-
     log_action(db, user, "agreement.extract", "agreement", f"{agreement.id} confidence={result['overall_confidence']}")
     return {
         "rules": result["rules"],
         "field_confidence": result["field_confidence"],
         "overall_confidence": result["overall_confidence"],
         "escalation_pct_annual": result["escalation_pct_annual"],
-        "commercial_id": commercial.id,
     }

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Agreement, BillingRun, Client, Commercial, CreditNote, Invoice, Payment, User
-from app.services import csv_parser, settings_store, zoho
+from app.services import csv_parser, settings_store, usage_db, zoho
 from app.services.auth import require_user, require_write
 from app.services.engine import compute_invoice
 from app.routers.core_routes import log_action
@@ -41,31 +41,17 @@ def _is_annual_due(client: Client, commercial: Commercial, period: str, confirm_
     return True, ""
 
 
-@router.post("/calculate")
-async def calculate_billing(
-    period: str = Form(...),
-    tds_rate: float = Form(0.0),
-    confirm_annual: str = Form(""),  # comma-separated EnterpriseIds
-    loading_file: UploadFile = File(...),
-    upi_file: UploadFile = File(...),
-    users_file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    user: User = Depends(require_write("billing")),
-):
-    loading = csv_parser.parse_loading_csv(await loading_file.read())
-    upi = csv_parser.parse_upi_csv(await upi_file.read())
-    users = csv_parser.parse_users_csv(await users_file.read())
-
+def _generate_run(db: Session, user: User, period: str, tds_rate: float, confirm_ids: set[str],
+                  usage_by_client: dict, unknown_ids: list[str], source: str) -> dict:
+    """Shared by the database pull and the CSV fallback: turn per-client usage
+    into draft invoices using each client's locked terms."""
     clients = db.query(Client).all()
-    known_ids = {c.enterprise_id for c in clients}
-    usage_by_client, unknown_ids = csv_parser.aggregate_usage(loading, upi, users, known_ids)
-
-    confirm_ids = {x.strip() for x in confirm_annual.split(",") if x.strip()}
 
     settings = settings_store.get_all_settings(db)
     org_state_code = settings["ORG_STATE_CODE"]
     gst_rate = float(settings["DEFAULT_GST_RATE"])
     prefix = settings["INVOICE_PREFIX"]
+    default_terms = int(settings.get("PAYMENT_TERMS_DAYS", 15) or 15)
 
     run = BillingRun(period=period, tds_rate=tds_rate, status="draft", created_by=user.email)
     db.add(run)
@@ -75,6 +61,9 @@ async def calculate_billing(
     invoices_out = []
     skipped = []
     for client in clients:
+        if (client.status or "active") != "active":
+            skipped.append({"enterprise_id": client.enterprise_id, "reason": f"customer is {client.status}"})
+            continue
         commercial = db.query(Commercial).filter(Commercial.client_id == client.id, Commercial.status == "locked").first()
         if commercial is None:
             skipped.append({"enterprise_id": client.enterprise_id, "reason": "no locked commercial"})
@@ -92,7 +81,7 @@ async def calculate_billing(
             continue
 
         invoice_no = _next_invoice_no(db, prefix)
-        terms_days = int(settings.get("PAYMENT_TERMS_DAYS", 15) or 15)
+        terms_days = int(client.payment_terms_days or default_terms)
         due_date = (datetime.date.today() + datetime.timedelta(days=terms_days)).isoformat()
         invoice = Invoice(
             run_id=run.id, client_id=client.id, invoice_no=invoice_no, period=period,
@@ -101,6 +90,7 @@ async def calculate_billing(
             payment_terms_days=terms_days, due_date=due_date, balance_due=result["total"],
         )
         db.add(invoice)
+        db.flush()  # keep invoice numbering unique within the run
 
         if client.billing_frequency == "annual" and not commercial.first_invoice_date:
             commercial.first_invoice_date = f"{period}-06"
@@ -109,10 +99,51 @@ async def calculate_billing(
 
     run.summary = {
         "invoices_generated": len(invoices_out), "skipped": skipped, "unknown_enterprise_ids": unknown_ids,
+        "usage_source": source,
     }
     db.commit()
-    log_action(db, user, "billing.calculate", "billing_run", f"run={run.id} invoices={len(invoices_out)}")
-    return {"run_id": run.id, "invoices": invoices_out, "skipped": skipped, "unknown_enterprise_ids": unknown_ids}
+    log_action(db, user, "billing.calculate", "billing_run", f"run={run.id} invoices={len(invoices_out)} source={source}")
+    return {"run_id": run.id, "invoices": invoices_out, "skipped": skipped, "unknown_enterprise_ids": unknown_ids, "usage_source": source}
+
+
+@router.post("/calculate-db")
+def calculate_billing_from_db(
+    period: str = Form(...),
+    tds_rate: float = Form(0.0),
+    confirm_annual: str = Form(""),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_write("billing")),
+):
+    """Primary path: read the period's usage directly from the platform database."""
+    try:
+        loading, upi, users = usage_db.fetch_usage(db, period)
+    except usage_db.UsageDbError as exc:
+        raise HTTPException(400, f"Usage database: {exc}")
+    known_ids = {c.enterprise_id for c in db.query(Client).all()}
+    usage_by_client, unknown_ids = csv_parser.aggregate_usage(loading, upi, users, known_ids)
+    confirm_ids = {x.strip() for x in confirm_annual.split(",") if x.strip()}
+    return _generate_run(db, user, period, tds_rate, confirm_ids, usage_by_client, unknown_ids, "database")
+
+
+@router.post("/calculate")
+async def calculate_billing(
+    period: str = Form(...),
+    tds_rate: float = Form(0.0),
+    confirm_annual: str = Form(""),  # comma-separated EnterpriseIds
+    loading_file: UploadFile = File(...),
+    upi_file: UploadFile = File(...),
+    users_file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_write("billing")),
+):
+    """Fallback path: monthly CSV exports (kept for backfills / when the DB feed is down)."""
+    loading = csv_parser.parse_loading_csv(await loading_file.read())
+    upi = csv_parser.parse_upi_csv(await upi_file.read())
+    users = csv_parser.parse_users_csv(await users_file.read())
+    known_ids = {c.enterprise_id for c in db.query(Client).all()}
+    usage_by_client, unknown_ids = csv_parser.aggregate_usage(loading, upi, users, known_ids)
+    confirm_ids = {x.strip() for x in confirm_annual.split(",") if x.strip()}
+    return _generate_run(db, user, period, tds_rate, confirm_ids, usage_by_client, unknown_ids, "csv")
 
 
 @router.get("/runs")

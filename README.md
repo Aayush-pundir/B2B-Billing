@@ -16,13 +16,18 @@ calculation, reconciliation, and reporting runs locally.
 
 ## Order-to-cash cycle
 
-1. **Client sync** — bulk CSV import, manual entry, or a one-way pull from
+1. **Customer master data** — full identity/tax/contact/billing profile; bulk
+   Excel/CSV import (create or update), manual entry, or a one-way pull from
    your CRM's account export (CRM owns identity fields; this platform owns
    billing data — see CRM Sync page).
-2. **Commercial capture** — agreement upload → offline OCR extraction →
-   review → lock (immutable version snapshot).
-3. **Monthly billing** — upload the three usage CSVs, the slab engine
-   computes GST/TDS and produces draft invoices.
+2. **Billing terms (Finance only)** — three ways in: manual entry, import from
+   a reviewed agreement (upload → offline OCR extraction → review → import),
+   or bulk Excel. Always lands as a draft; lock it to create an immutable
+   version snapshot. No other role can amend terms.
+3. **Monthly billing** — usage is read straight from your platform database
+   (`USAGE_DATABASE_URL`, read-only; queries editable in Settings). The slab
+   engine computes GST/TDS and produces draft invoices. CSV upload remains as
+   a fallback.
 4. **Issue & deliver** — approve the draft, get a native PDF invoice with its
    own numbering, email it (or push to Zoho as an optional channel).
 5. **Reconcile** — upload a bank statement (any bank's CSV export) or a

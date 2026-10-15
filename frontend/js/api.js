@@ -37,11 +37,12 @@ const Apx = {
   createClient: (data) => request('/api/clients', { method: 'POST', body: data }),
   updateClient: (id, data) => request(`/api/clients/${id}`, { method: 'PUT', body: data }),
   deleteClient: (id) => request(`/api/clients/${id}`, { method: 'DELETE' }),
-  bulkImportClients: (file) => {
+  bulkImportClients: (file, updateExisting = false) => {
     const fd = new FormData(); fd.append('file', file);
-    return request('/api/clients/bulk', { method: 'POST', body: fd, isForm: true });
+    return request(`/api/clients/bulk?update_existing=${updateExisting}`, { method: 'POST', body: fd, isForm: true });
   },
   clientTemplateUrl: () => `${API_BASE}/api/clients/template`,
+  clientExportUrl: () => `${API_BASE}/api/clients/export`,
 
   // commercials
   listCommercials: () => request('/api/commercials'),
@@ -49,6 +50,12 @@ const Apx = {
   lockCommercial: (id) => request(`/api/commercials/${id}/lock`, { method: 'POST' }),
   unlockCommercial: (id) => request(`/api/commercials/${id}/unlock`, { method: 'POST' }),
   commercialVersions: (id) => request(`/api/commercials/${id}/versions`),
+  termsExcelTemplateUrl: () => `${API_BASE}/api/commercials/excel-template`,
+  bulkExcelTerms: (file, dryRun) => {
+    const fd = new FormData(); fd.append('file', file);
+    return request(`/api/commercials/bulk-excel?dry_run=${dryRun}`, { method: 'POST', body: fd, isForm: true });
+  },
+  importAgreementTerms: (agreementId) => request(`/api/commercials/from-agreement/${agreementId}`, { method: 'POST' }),
   escalateCommercial: (id, pct) => request(`/api/commercials/${id}/escalate`, { method: 'POST', body: { pct } }),
 
   // metrics / addons
@@ -79,6 +86,10 @@ const Apx = {
   extractAgreement: (id) => request(`/api/agreements/${id}/extract`, { method: 'POST' }),
 
   // billing
+  calculateBillingDb: (formData) => request('/api/billing/calculate-db', { method: 'POST', body: formData, isForm: true }),
+  datasource: () => request('/api/datasource'),
+  saveDatasource: (queries) => request('/api/datasource', { method: 'PUT', body: { queries } }),
+  testDatasource: (period) => request('/api/datasource/test', { method: 'POST', body: { period } }),
   calculateBilling: (formData) => request('/api/billing/calculate', { method: 'POST', body: formData, isForm: true }),
   listRuns: () => request('/api/billing/runs'),
   runDetail: (id) => request(`/api/billing/runs/${id}`),

@@ -26,6 +26,10 @@ class Settings:
         self.SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
         self.SMTP_FROM = os.getenv("SMTP_FROM", "")
 
+        # Read-only connection to the platform database holding raw usage (loading, UPI, users).
+        # Kept in the environment — never stored in the app database or shown in the UI.
+        self.USAGE_DATABASE_URL = os.getenv("USAGE_DATABASE_URL", "")
+
         self.UPLOAD_DIR = os.getenv("UPLOAD_DIR", "./data/uploads")
 
         self.AZURE_CLIENT_ID = os.getenv("AZURE_CLIENT_ID", "")

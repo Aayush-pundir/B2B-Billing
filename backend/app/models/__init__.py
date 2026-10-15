@@ -39,6 +39,30 @@ class Client(Base):
     created_at = Column(DateTime, default=now)
     updated_at = Column(DateTime, default=now, onupdate=now)
 
+    # --- customer master data ---
+    status = Column(String, default="active")  # active, inactive, blocked
+    customer_type = Column(String, default="business")  # business, individual
+    legal_name = Column(String, default="")
+    trade_name = Column(String, default="")
+    gst_treatment = Column(String, default="registered")  # registered, unregistered, composition, sez, overseas
+    tan = Column(String, default="")
+    cin = Column(String, default="")
+    msme_no = Column(String, default="")
+    address_line1 = Column(String, default="")
+    address_line2 = Column(String, default="")
+    city = Column(String, default="")
+    pincode = Column(String, default="")
+    country = Column(String, default="India")
+    contact_name = Column(String, default="")
+    contact_phone = Column(String, default="")
+    cc_emails = Column(String, default="")  # comma-separated extra recipients for invoices/reminders
+    currency = Column(String, default="INR")
+    payment_terms_days = Column(Integer, nullable=True)  # overrides org default when set
+    credit_limit = Column(Float, default=0.0)  # 0 = no limit
+    account_manager = Column(String, default="")
+    segment = Column(String, default="")
+    notes = Column(Text, default="")
+
     agreements = relationship("Agreement", back_populates="client", cascade="all, delete-orphan")
     commercials = relationship("Commercial", back_populates="client", cascade="all, delete-orphan")
 
@@ -71,6 +95,12 @@ class Commercial(Base):
     rules = Column(JSON, default=list)  # list of rule dicts
     status = Column(String, default="draft")  # draft, locked
     version_no = Column(Integer, default=0)
+    # How the current terms got here: manual, agreement (imported from a reviewed
+    # agreement), excel (bulk upload). Amended only by the finance role.
+    source = Column(String, default="manual")
+    source_ref = Column(String, default="")
+    amended_by = Column(String, default="")
+    amended_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=now)
     updated_at = Column(DateTime, default=now, onupdate=now)
 
@@ -87,6 +117,7 @@ class CommercialVersion(Base):
     rules = Column(JSON, default=list)
     billing_frequency = Column(String, default="monthly")
     snapshot_reason = Column(String, default="locked")  # locked, escalation +10%
+    source = Column(String, default="manual")
     created_by = Column(String, default="")
     created_at = Column(DateTime, default=now)
 

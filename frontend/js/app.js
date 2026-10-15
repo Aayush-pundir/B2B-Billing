@@ -6,10 +6,10 @@ const state = { user: null, route: 'dashboard' };
 
 const PAGES = [
   { id: 'dashboard', label: 'Dashboard', icon: 'fa-gauge', group: 'Overview', sub: 'Your billing pipeline at a glance' },
-  { id: 'clients', label: 'Clients', icon: 'fa-building', group: 'Setup', sub: 'Manage client accounts and tax details' },
+  { id: 'clients', label: 'Customers', icon: 'fa-building', group: 'Setup', sub: 'Customer master data — identity, tax, contacts and billing preferences' },
   { id: 'agreements', label: 'Agreements', icon: 'fa-file-lines', group: 'Setup', sub: 'Upload contracts and extract commercial terms' },
-  { id: 'commercials', label: 'Commercials', icon: 'fa-sliders', group: 'Setup', sub: 'Review, edit and lock billing rules' },
-  { id: 'billing', label: 'Billing', icon: 'fa-file-invoice-dollar', group: 'Billing', sub: 'Run the monthly billing cycle from usage CSVs' },
+  { id: 'commercials', label: 'Commercials', icon: 'fa-sliders', group: 'Setup', sub: 'Billing terms — amended by Finance only, via manual entry, agreements or Excel' },
+  { id: 'billing', label: 'Billing', icon: 'fa-file-invoice-dollar', group: 'Billing', sub: 'Run the monthly billing cycle from live usage data' },
   { id: 'invoices', label: 'Invoices', icon: 'fa-receipt', group: 'Billing', sub: 'Issue, send and track invoices' },
   { id: 'receivables', label: 'Receivables', icon: 'fa-scale-balanced', group: 'Collections', sub: 'Outstanding balances and aging' },
   { id: 'reconciliation', label: 'Reconciliation', icon: 'fa-money-check-dollar', group: 'Collections', sub: 'Match bank payments to invoices' },
@@ -32,6 +32,8 @@ function toast(msg, isError = false) {
 }
 
 function esc(s) { return (s ?? '').toString().replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+const isFinance = () => state.user && state.user.role === 'finance';
+const canEditClients = () => state.user && ['admin', 'accounts', 'finance'].includes(state.user.role);
 function money(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
 // ---------------------------------------------------------------------------
@@ -223,17 +225,19 @@ async function renderClients(content) {
   const clients = await Apx.listClients();
   content.innerHTML = `
     <div class="actions-row">
-      <button id="add-client"><i class="fa-solid fa-plus"></i> Add Client</button>
-      <a class="btn ghost" href="${Apx.clientTemplateUrl()}"><i class="fa-solid fa-download"></i> Bulk Import Template</a>
+      ${canEditClients() ? `<button id="add-client"><i class="fa-solid fa-plus"></i> Add customer</button>
+      <a class="btn ghost" href="${Apx.clientTemplateUrl()}"><i class="fa-solid fa-download"></i> Template</a>
       <label class="btn secondary" style="cursor:pointer;">
-        <i class="fa-solid fa-upload"></i> Bulk Import CSV
-        <input type="file" id="bulk-file" accept=".csv" style="display:none" />
+        <i class="fa-solid fa-file-excel"></i> Bulk import (Excel / CSV)
+        <input type="file" id="bulk-file" accept=".csv,.xlsx,.xlsm" style="display:none" />
       </label>
-      <input id="search" placeholder="Search clients…" style="margin-left:auto;min-width:220px" />
+      <label class="inline-check"><input type="checkbox" id="bulk-update" /> update existing</label>` : ''}
+      <a class="btn ghost" href="${Apx.clientExportUrl()}"><i class="fa-solid fa-file-export"></i> Export</a>
+      <input id="search" placeholder="Search customers…" style="margin-left:auto;min-width:220px" />
     </div>
     <div id="client-form-wrap"></div>
     <div class="card"><div class="table-wrap"><table>
-      <thead><tr><th>EnterpriseId</th><th>Name</th><th>GST</th><th>State</th><th>Frequency</th><th>Commercial</th><th>Zoho</th><th></th></tr></thead>
+      <thead><tr><th>EnterpriseId</th><th>Customer</th><th>GST</th><th>State</th><th>Frequency</th><th>Status</th><th>Terms</th><th>Zoho</th><th></th></tr></thead>
       <tbody id="client-rows"></tbody>
     </table></div></div>
   `;
@@ -242,14 +246,15 @@ async function renderClients(content) {
     document.getElementById('client-rows').innerHTML = list.map(c => `
       <tr data-id="${c.id}">
         <td>${esc(c.enterprise_id)}</td>
-        <td>${esc(c.name)}</td>
+        <td><b>${esc(c.name)}</b>${c.contact_name || c.billing_contact_email ? `<div class="muted" style="font-size:.75rem">${esc(c.contact_name || c.billing_contact_email)}</div>` : ''}</td>
         <td>${esc(c.gst)}</td>
         <td>${esc(c.state)} ${esc(c.state_code)}</td>
         <td>${esc(c.billing_frequency)}</td>
+        <td><span class="badge ${c.status === 'active' ? 'locked' : c.status === 'blocked' ? 'error' : 'none'}">${esc(c.status || 'active')}</span></td>
         <td><span class="badge ${c.commercial_status}">${c.commercial_status}</span></td>
         <td>${c.zoho_contact_id ? '<i class="fa-solid fa-check" style="color:var(--teal)"></i>' : `<i class="fa-solid fa-cloud zoho-create" style="cursor:pointer;color:var(--muted)" title="Create Zoho contact"></i>`}</td>
-        <td><i class="fa-solid fa-file-invoice statement-client" style="cursor:pointer;margin-right:0.6rem" title="Statement of account"></i><i class="fa-solid fa-pen edit-client" style="cursor:pointer;margin-right:0.6rem"></i><i class="fa-solid fa-trash del-client" style="cursor:pointer;color:var(--danger)"></i></td>
-      </tr>`).join('') || '<tr><td colspan="8" class="muted">No clients yet — add one to get started.</td></tr>';
+        <td><i class="fa-solid fa-file-invoice statement-client" style="cursor:pointer;margin-right:0.6rem" title="Statement of account"></i>${canEditClients() ? `<i class="fa-solid fa-pen edit-client" style="cursor:pointer;margin-right:0.6rem"></i><i class="fa-solid fa-trash del-client" style="cursor:pointer;color:var(--danger)"></i>` : ''}</td>
+      </tr>`).join('') || '<tr><td colspan="9" class="muted">No customers yet — add one or bulk-import from Excel.</td></tr>';
 
     content.querySelectorAll('.statement-client').forEach(el => el.addEventListener('click', async (e) => {
       const id = e.target.closest('tr').dataset.id;
@@ -284,57 +289,71 @@ async function renderClients(content) {
     }));
   }
 
+  const FORM = [
+    ['Identity', [
+      ['enterprise_id', 'Enterprise ID *'], ['name', 'Display name *'], ['legal_name', 'Legal name'], ['trade_name', 'Trade name'],
+      ['customer_type', 'Type', ['business', 'individual']], ['status', 'Status', ['active', 'inactive', 'blocked']],
+    ]],
+    ['Tax', [
+      ['gst_treatment', 'GST treatment', ['registered', 'unregistered', 'composition', 'sez', 'overseas']], ['gst', 'GSTIN'], ['pan', 'PAN'], ['tan', 'TAN'],
+      ['cin', 'CIN'], ['msme_no', 'MSME / Udyam no.'],
+    ]],
+    ['Address', [
+      ['address_line1', 'Address line 1'], ['address_line2', 'Address line 2'], ['city', 'City'], ['state', 'State'], ['state_code', 'State code (e.g. 09)'],
+      ['pincode', 'PIN code'], ['country', 'Country'],
+    ]],
+    ['Contacts', [
+      ['contact_name', 'Contact person'], ['contact_phone', 'Phone'], ['billing_contact_email', 'Billing email'], ['cc_emails', 'CC emails (comma separated)'],
+    ]],
+    ['Billing preferences', [
+      ['billing_frequency', 'Billing frequency', ['monthly', 'annual']], ['currency', 'Currency', ['INR', 'USD', 'EUR', 'AED', 'GBP']],
+      ['payment_terms_days', 'Payment terms (days)', null, 'number'], ['credit_limit', 'Credit limit (0 = none)', null, 'number'],
+      ['account_manager', 'Account manager'], ['segment', 'Segment'],
+    ]],
+  ];
+
   function showClientForm(client) {
     const wrap = document.getElementById('client-form-wrap');
-    const c = client || { enterprise_id: '', name: '', gst: '', pan: '', state: '', state_code: '', billing_contact_email: '', billing_frequency: 'monthly' };
+    const c = client || { status: 'active', customer_type: 'business', gst_treatment: 'registered', billing_frequency: 'monthly', currency: 'INR', country: 'India', credit_limit: 0 };
+    const field = ([k, label, opts, type]) => `<label>${label}${opts
+      ? `<select data-k="${k}">${opts.map(o => `<option ${String(c[k] ?? opts[0]) === o ? 'selected' : ''}>${o}</option>`).join('')}</select>`
+      : `<input data-k="${k}" type="${type || 'text'}" value="${esc(c[k] ?? '')}" ${client && k === 'enterprise_id' ? 'disabled' : ''} />`}</label>`;
     wrap.innerHTML = `
       <div class="card">
-        <h3>${client ? 'Edit' : 'New'} Client</h3>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0.6rem;">
-          <input id="f-eid" placeholder="EnterpriseId" value="${esc(c.enterprise_id)}" ${client ? 'disabled' : ''} />
-          <input id="f-name" placeholder="Client name" value="${esc(c.name)}" />
-          <input id="f-gst" placeholder="GSTIN" value="${esc(c.gst)}" />
-          <input id="f-pan" placeholder="PAN" value="${esc(c.pan)}" />
-          <input id="f-state" placeholder="State" value="${esc(c.state)}" />
-          <input id="f-statecode" placeholder="State code (e.g. 09)" value="${esc(c.state_code)}" />
-          <input id="f-email" placeholder="Billing contact email" value="${esc(c.billing_contact_email)}" />
-          <select id="f-freq"><option value="monthly" ${c.billing_frequency === 'monthly' ? 'selected' : ''}>Monthly</option><option value="annual" ${c.billing_frequency === 'annual' ? 'selected' : ''}>Annual</option></select>
-        </div>
-        <div class="actions-row" style="margin-top:0.8rem">
-          <button id="save-client">Save</button>
-          <button class="ghost" id="cancel-client">Cancel</button>
-        </div>
+        <h3>${client ? 'Edit' : 'New'} customer</h3>
+        ${FORM.map(([title, fields]) => `<div class="form-section"><h4>${title}</h4><div class="form-grid">${fields.map(field).join('')}</div></div>`).join('')}
+        <div class="form-section"><h4>Notes</h4><label><textarea data-k="notes" rows="3">${esc(c.notes || '')}</textarea></label></div>
+        <div class="actions-row"><button id="save-client">Save customer</button><button class="ghost" id="cancel-client">Cancel</button></div>
       </div>`;
+    wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
     wrap.querySelector('#cancel-client').addEventListener('click', () => wrap.innerHTML = '');
     wrap.querySelector('#save-client').addEventListener('click', async () => {
-      const data = {
-        enterprise_id: wrap.querySelector('#f-eid').value.trim(),
-        name: wrap.querySelector('#f-name').value.trim(),
-        gst: wrap.querySelector('#f-gst').value.trim(),
-        pan: wrap.querySelector('#f-pan').value.trim(),
-        state: wrap.querySelector('#f-state').value.trim(),
-        state_code: wrap.querySelector('#f-statecode').value.trim(),
-        billing_contact_email: wrap.querySelector('#f-email').value.trim(),
-        billing_frequency: wrap.querySelector('#f-freq').value,
-      };
-      if (!data.enterprise_id || !data.name) return toast('EnterpriseId and Name are required', true);
+      const data = {};
+      wrap.querySelectorAll('[data-k]').forEach(el => {
+        let v = el.value.trim();
+        if (el.type === 'number') v = v === '' ? (el.dataset.k === 'credit_limit' ? 0 : null) : Number(v);
+        data[el.dataset.k] = v;
+      });
+      if (client) data.enterprise_id = client.enterprise_id;
+      if (!data.enterprise_id || !data.name) return toast('Enterprise ID and display name are required', true);
       try {
         if (client) await Apx.updateClient(client.id, data);
         else await Apx.createClient(data);
-        toast('Client saved');
+        toast('Customer saved');
         navigate('clients');
       } catch (e) { toast(e.message, true); }
     });
   }
 
-  document.getElementById('add-client').addEventListener('click', () => showClientForm(null));
-  document.getElementById('bulk-file').addEventListener('change', async (e) => {
+  document.getElementById('add-client')?.addEventListener('click', () => showClientForm(null));
+  document.getElementById('bulk-file')?.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     try {
-      const res = await Apx.bulkImportClients(file);
-      toast(`Imported ${res.created} clients (${res.skipped.length} skipped)`);
-      navigate('clients');
+      const res = await Apx.bulkImportClients(file, document.getElementById('bulk-update').checked);
+      toast(`Imported ${res.created} new, updated ${res.updated}${res.skipped.length ? `, ${res.skipped.length} skipped` : ''}`, false);
+      if (res.skipped.length) document.getElementById('client-form-wrap').innerHTML = `<div class="alert-bar warn" style="display:block"><b>Skipped rows</b><br>${res.skipped.slice(0, 12).map(esc).join('<br>')}${res.skipped.length > 12 ? `<br>…and ${res.skipped.length - 12} more` : ''}</div>`;
+      else navigate('clients');
     } catch (err) { toast(err.message, true); }
   });
   document.getElementById('search').addEventListener('input', (e) => {
@@ -407,9 +426,10 @@ async function renderAgreements(content) {
             <thead><tr><th>Label</th><th>Type</th><th>Detail</th></tr></thead>
             <tbody>${result.rules.map(r => `<tr><td>${esc(r.label)}</td><td>${esc(r.rate_type)}</td><td class="mono">${esc(JSON.stringify(r))}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No rules recognised — edit manually in Commercials.</td></tr>'}</tbody>
           </table></div>
-          <p class="muted">Saved as a DRAFT commercial for this client — review &amp; lock it on the <a href="#commercials">Commercials</a> page.</p>
+          <p class="muted">Extraction does not change billing terms. Finance can import this result as draft terms from <a href="#commercials">Commercials → From agreements</a>.</p>
         </div>`;
-      navigate('agreements');
+      btn.textContent = 'Re-extract'; btn.disabled = false;
+      btn.closest('tr').querySelector('.badge').outerHTML = '<span class="badge locked">extracted</span>';
     } catch (err) {
       toast(err.message, true);
       btn.textContent = 'Extract'; btn.disabled = false;
@@ -437,20 +457,114 @@ function ruleRowHtml(rule, idx) {
 }
 
 async function renderCommercials(content) {
-  const [commercials, clients] = await Promise.all([Apx.listCommercials(), Apx.listClients()]);
+  const [commercials, clients, agreements] = await Promise.all([Apx.listCommercials(), Apx.listClients(), Apx.listAgreements()]);
+  const canEdit = isFinance();
+  const tab = canEdit ? (state.cmTab || 'manual') : null;
+  const cname = (id) => clients.find(x => x.id === id)?.name || `#${id}`;
+  const srcIcon = { manual: 'fa-keyboard', agreement: 'fa-file-contract', excel: 'fa-file-excel' };
+
+  content.innerHTML = `
+    ${canEdit ? '' : `<div class="alert-bar warn"><i class="fa-solid fa-lock"></i> <span>Billing terms can only be amended by the <b>Finance</b> role. You can view them here.</span></div>`}
+    ${canEdit ? `<div class="tabs">
+      <button class="tab ${tab === 'manual' ? 'active' : ''}" data-tab="manual"><i class="fa-solid fa-keyboard"></i> Manual entry</button>
+      <button class="tab ${tab === 'agreements' ? 'active' : ''}" data-tab="agreements"><i class="fa-solid fa-file-contract"></i> From agreements</button>
+      <button class="tab ${tab === 'excel' ? 'active' : ''}" data-tab="excel"><i class="fa-solid fa-file-excel"></i> Bulk Excel</button>
+    </div><div id="cm-panel"></div>` : ''}
+    <div class="card">
+      <h3>All billing terms</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Client</th><th>Frequency</th><th>Rules</th><th>Status</th><th>Version</th><th>Source</th><th>Last amended</th></tr></thead>
+        <tbody>${commercials.map(c => `<tr><td>${esc(cname(c.client_id))}</td><td>${esc(c.billing_frequency)}</td><td>${(c.rules || []).length}</td><td><span class="badge ${c.status}">${c.status}</span></td><td>v${c.version_no}</td>
+          <td><i class="fa-solid ${srcIcon[c.source] || 'fa-keyboard'} muted"></i> ${esc(c.source)}${c.source_ref ? ` <span class="muted">· ${esc(c.source_ref)}</span>` : ''}</td>
+          <td class="muted">${c.amended_by ? `${esc(c.amended_by)} · ${new Date(c.amended_at).toLocaleDateString()}` : '—'}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">No billing terms yet</td></tr>'}</tbody>
+      </table></div>
+    </div>`;
+
+  if (!canEdit) return;
+  content.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => { state.cmTab = b.dataset.tab; navigate('commercials'); }));
+  const panel = document.getElementById('cm-panel');
+  if (tab === 'manual') renderManualTab(panel, commercials, clients);
+  else if (tab === 'agreements') renderAgreementTermsTab(panel, agreements, commercials, cname);
+  else renderExcelTermsTab(panel);
+}
+
+function renderAgreementTermsTab(panel, agreements, commercials, cname) {
+  panel.innerHTML = `
+    <div class="card">
+      <h3>Import terms from reviewed agreements</h3>
+      <p class="muted">Extraction never changes billing terms by itself. Review the extracted result, then import it here as a draft — you can still edit and must lock it before billing.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Client</th><th>Agreement</th><th>Extraction</th><th>Current terms</th><th></th></tr></thead>
+        <tbody>${agreements.map(a => {
+          const cm = commercials.find(c => c.client_id === a.client_id);
+          const locked = cm && cm.status === 'locked';
+          return `<tr data-id="${a.id}"><td>${esc(cname(a.client_id))}</td><td>${esc(a.file_name)}</td>
+            <td>${a.has_extraction ? '<span class="badge locked">extracted</span>' : '<span class="badge draft">not extracted</span>'}</td>
+            <td>${cm ? `<span class="badge ${cm.status}">${cm.status}</span>` : '<span class="badge none">none</span>'}</td>
+            <td>${a.has_extraction ? `<button class="import-terms" ${locked ? 'disabled title="Unlock the terms first"' : ''}><i class="fa-solid fa-file-import"></i> Import as draft</button>` : '<span class="muted">Run extraction on the Agreements page</span>'}</td></tr>`;
+        }).join('') || '<tr><td colspan="5" class="muted">No agreements uploaded yet — upload one on the Agreements page.</td></tr>'}</tbody>
+      </table></div>
+    </div>`;
+  panel.querySelectorAll('.import-terms').forEach(btn => btn.addEventListener('click', async (e) => {
+    const id = e.target.closest('tr').dataset.id;
+    try {
+      const r = await Apx.importAgreementTerms(id);
+      toast(`Imported ${r.rules.length} rule(s) as a draft${r.overall_confidence != null ? ` (confidence ${r.overall_confidence}%)` : ''} — review and lock`);
+      state.cmTab = 'manual';
+      navigate('commercials');
+    } catch (err) { toast(err.message, true); }
+  }));
+}
+
+function renderExcelTermsTab(panel) {
+  panel.innerHTML = `
+    <div class="card">
+      <h3>Bulk upload terms from Excel</h3>
+      <p class="muted">One row per rule — a client with several rules has several rows. Each client is saved as a draft only if all of its rows are valid.</p>
+      <div class="actions-row">
+        <a class="btn ghost" href="${Apx.termsExcelTemplateUrl()}"><i class="fa-solid fa-download"></i> Download template (.xlsx)</a>
+        <input type="file" id="xl-file" accept=".xlsx,.xlsm,.csv" />
+        <button id="xl-check"><i class="fa-solid fa-magnifying-glass-chart"></i> Validate file</button>
+        <button class="secondary" id="xl-save" disabled><i class="fa-solid fa-floppy-disk"></i> Save valid clients as drafts</button>
+      </div>
+      <div id="xl-result"></div>
+    </div>`;
+  const fileEl = panel.querySelector('#xl-file'), saveBtn = panel.querySelector('#xl-save');
+  const draw = (res) => {
+    panel.querySelector('#xl-result').innerHTML = `
+      <p><b>${res.results.filter(r => r.status !== 'error').length}</b> client(s) ${res.dry_run ? 'ready to save' : 'saved'} · <b>${res.failed}</b> with errors</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>EnterpriseId</th><th>Rules</th><th>Status</th><th>Issues</th></tr></thead>
+        <tbody>${res.results.map(r => `<tr><td>${esc(r.enterprise_id)}</td><td>${r.rules}</td><td><span class="badge ${r.status}">${r.status}</span></td>
+          <td style="white-space:normal">${r.errors.map(e => `<div class="muted">${esc(e)}</div>`).join('') || '—'}</td></tr>`).join('')}</tbody>
+      </table></div>`;
+  };
+  fileEl.addEventListener('change', () => { saveBtn.disabled = true; panel.querySelector('#xl-result').innerHTML = ''; });
+  panel.querySelector('#xl-check').addEventListener('click', async () => {
+    if (!fileEl.files[0]) return toast('Choose a file first', true);
+    try {
+      const res = await Apx.bulkExcelTerms(fileEl.files[0], true);
+      draw(res);
+      saveBtn.disabled = res.results.every(r => r.status === 'error');
+    } catch (e) { toast(e.message, true); }
+  });
+  saveBtn.addEventListener('click', async () => {
+    try {
+      const res = await Apx.bulkExcelTerms(fileEl.files[0], false);
+      draw(res);
+      saveBtn.disabled = true;
+      toast(`${res.saved} client(s) saved as drafts — review and lock them`);
+    } catch (e) { toast(e.message, true); }
+  });
+}
+
+function renderManualTab(content, commercials, clients) {
   content.innerHTML = `
     <div class="actions-row">
       <select id="cm-client">${clients.map(c => `<option value="${c.id}">${esc(c.name)} (${esc(c.enterprise_id)})</option>`).join('')}</select>
       <button id="cm-load" class="ghost">Load Commercial</button>
     </div>
     <div id="cm-editor"></div>
-    <div class="card">
-      <h3>All Commercials</h3>
-      <div class="table-wrap"><table>
-        <thead><tr><th>Client</th><th>Frequency</th><th>Rules</th><th>Status</th><th>Version</th></tr></thead>
-        <tbody>${commercials.map(c => `<tr><td>${esc(clients.find(x => x.id === c.client_id)?.name || c.client_id)}</td><td>${esc(c.billing_frequency)}</td><td>${(c.rules || []).length}</td><td><span class="badge ${c.status}">${c.status}</span></td><td>v${c.version_no}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">No commercials yet</td></tr>'}</tbody>
-      </table></div>
-    </div>
   `;
 
   function loadEditor(clientId) {
@@ -567,23 +681,47 @@ async function renderCommercials(content) {
 // Billing — monthly run
 // ---------------------------------------------------------------------------
 
+const DS_LABEL = { loading: 'Loading', upi: 'UPI transactions', users: 'Users' };
+function renderDatasourceTest(results) {
+  return `<div class="ds-test">${Object.entries(results).map(([name, r]) => r.ok
+    ? `<div class="ds-row ok"><b>${esc(DS_LABEL[name] || name)}</b><span class="badge locked">${r.rows} row(s) · ${r.seconds}s</span>
+        <div class="muted mono">${r.sample.length ? esc(r.columns.join(' | ')) + '<br>' + r.sample.map(x => esc(Object.values(x).join(' | '))).join('<br>') : 'No rows for this period'}</div></div>`
+    : `<div class="ds-row bad"><b>${esc(DS_LABEL[name] || name)}</b><span class="badge error">failed</span><div class="muted mono">${esc(r.error)}</div></div>`).join('')}</div>`;
+}
+
 async function renderBilling(content) {
-  const runs = await Apx.listRuns();
+  const [runs, ds] = await Promise.all([Apx.listRuns(), Apx.datasource()]);
   const today = new Date();
   const defaultPeriod = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
 
   content.innerHTML = `
     <div class="card">
-      <h3>Run Monthly Billing</h3>
-      <p class="muted">Upload all three CSVs — Loading, UPI Transactions, Users — for the period.</p>
+      <div class="flex-between">
+        <h3>Run monthly billing</h3>
+        ${ds.configured
+          ? `<span class="badge locked" title="${esc(ds.dialect)} · ${esc(ds.host)}">Database connected</span>`
+          : '<span class="badge draft">Database not configured</span>'}
+      </div>
+      <p class="muted">Usage — loading, UPI transactions and users — is pulled straight from the platform database for the period you pick. Each customer is billed on its locked terms.</p>
+      ${ds.configured ? '' : '<div class="alert-bar warn"><i class="fa-solid fa-plug"></i> Set <code>USAGE_DATABASE_URL</code> on the server to enable the live database feed. Until then, use the CSV fallback below.</div>'}
       <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.6rem;max-width:640px;">
         <label>Period<input type="month" id="b-period" value="${defaultPeriod}" /></label>
         <label>TDS Rate %<input type="number" id="b-tds" value="0" step="0.1" /></label>
-        <label><span>Loading CSV <a href="${Apx.templateUrl('loading')}">template</a></span><input type="file" id="b-loading" accept=".csv" /></label>
-        <label><span>UPI CSV <a href="${Apx.templateUrl('upi')}">template</a></span><input type="file" id="b-upi" accept=".csv" /></label>
-        <label><span>Users CSV <a href="${Apx.templateUrl('users')}">template</a></span><input type="file" id="b-users" accept=".csv" /></label>
       </div>
-      <div class="actions-row"><button id="b-run">Calculate Invoices</button></div>
+      <div class="actions-row">
+        <button id="b-run-db" ${ds.configured ? '' : 'disabled'}><i class="fa-solid fa-database"></i> Calculate from database</button>
+        <button class="ghost" id="b-test" ${ds.configured ? '' : 'disabled'}><i class="fa-solid fa-vial"></i> Preview usage</button>
+      </div>
+      <div id="b-test-result"></div>
+      <details class="fallback">
+        <summary>Fallback: upload CSV exports instead</summary>
+        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.6rem;max-width:640px;margin-top:.8rem">
+          <label><span>Loading CSV <a href="${Apx.templateUrl('loading')}">template</a></span><input type="file" id="b-loading" accept=".csv" /></label>
+          <label><span>UPI CSV <a href="${Apx.templateUrl('upi')}">template</a></span><input type="file" id="b-upi" accept=".csv" /></label>
+          <label><span>Users CSV <a href="${Apx.templateUrl('users')}">template</a></span><input type="file" id="b-users" accept=".csv" /></label>
+        </div>
+        <div class="actions-row" style="margin-top:.8rem"><button class="ghost" id="b-run">Calculate from CSVs</button></div>
+      </details>
     </div>
     <div id="b-result"></div>
     <div class="card">
@@ -596,30 +734,47 @@ async function renderBilling(content) {
     <div id="run-detail"></div>
   `;
 
+  const showRunResult = (res) => {
+    document.getElementById('b-result').innerHTML = `
+      <div class="card">
+        <h3>Run #${res.run_id} — ${res.invoices.length} invoice(s) generated <span class="badge none">${esc(res.usage_source)}</span></h3>
+        ${res.unknown_enterprise_ids.length ? `<div class="alert-bar warn">Usage found for EnterpriseIds that are not registered customers: ${res.unknown_enterprise_ids.join(', ')}</div>` : ''}
+        ${res.skipped.length ? `<h4>Skipped</h4><div class="table-wrap"><table><thead><tr><th>EnterpriseId</th><th>Reason</th></tr></thead><tbody>${res.skipped.map(s => `<tr><td>${esc(s.enterprise_id)}</td><td>${esc(s.reason)}</td></tr>`).join('')}</tbody></table></div>` : ''}
+      </div>`;
+    viewRun(res.run_id);
+  };
+
+  document.getElementById('b-run-db').addEventListener('click', async (e) => {
+    const btn = e.currentTarget; btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Reading usage…';
+    const fd = new FormData();
+    fd.append('period', document.getElementById('b-period').value);
+    fd.append('tds_rate', document.getElementById('b-tds').value || '0');
+    fd.append('confirm_annual', '');
+    try { showRunResult(await Apx.calculateBillingDb(fd)); toast('Billing run created from database usage'); }
+    catch (err) { toast(err.message, true); }
+    btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-database"></i> Calculate from database';
+  });
+
+  document.getElementById('b-test').addEventListener('click', async () => {
+    const box = document.getElementById('b-test-result');
+    box.innerHTML = '<p class="muted"><i class="fa-solid fa-spinner fa-spin"></i> Querying…</p>';
+    try { box.innerHTML = renderDatasourceTest((await Apx.testDatasource(document.getElementById('b-period').value)).results); }
+    catch (err) { box.innerHTML = ''; toast(err.message, true); }
+  });
+
   document.getElementById('b-run').addEventListener('click', async () => {
     const loading = document.getElementById('b-loading').files[0];
     const upi = document.getElementById('b-upi').files[0];
     const users = document.getElementById('b-users').files[0];
     if (!loading || !upi || !users) return toast('All three CSVs are required', true);
-    const period = document.getElementById('b-period').value;
     const fd = new FormData();
-    fd.append('period', period);
+    fd.append('period', document.getElementById('b-period').value);
     fd.append('tds_rate', document.getElementById('b-tds').value || '0');
     fd.append('confirm_annual', '');
     fd.append('loading_file', loading);
     fd.append('upi_file', upi);
     fd.append('users_file', users);
-    try {
-      const res = await Apx.calculateBilling(fd);
-      document.getElementById('b-result').innerHTML = `
-        <div class="card">
-          <h3>Run #${res.run_id} — ${res.invoices.length} invoice(s) generated</h3>
-          ${res.unknown_enterprise_ids.length ? `<div class="alert-bar warn">Unknown EnterpriseIds in CSVs (not registered as clients): ${res.unknown_enterprise_ids.join(', ')}</div>` : ''}
-          ${res.skipped.length ? `<h4>Skipped</h4><div class="table-wrap"><table><thead><tr><th>EnterpriseId</th><th>Reason</th></tr></thead><tbody>${res.skipped.map(s => `<tr><td>${esc(s.enterprise_id)}</td><td>${esc(s.reason)}</td></tr>`).join('')}</tbody></table></div>` : ''}
-        </div>`;
-      viewRun(res.run_id);
-      navigate('billing');
-    } catch (e) { toast(e.message, true); }
+    try { showRunResult(await Apx.calculateBilling(fd)); } catch (e) { toast(e.message, true); }
   });
 
   content.querySelectorAll('.view-run').forEach(btn => btn.addEventListener('click', (e) => {
@@ -971,7 +1126,8 @@ async function renderAudit(content) {
 // ---------------------------------------------------------------------------
 
 async function renderSettings(content) {
-  const [settings, providers, health] = await Promise.all([Apx.getSettings(), Apx.providers(), Apx.health()]);
+  const [settings, providers, health, ds] = await Promise.all([Apx.getSettings(), Apx.providers(), Apx.health(), Apx.datasource()]);
+  const isAdmin = state.user.role === 'admin';
   content.innerHTML = `
     <div class="card">
       <h3>Organisation Settings</h3>
@@ -979,6 +1135,19 @@ async function renderSettings(content) {
         ${Object.entries(settings).map(([k, v]) => `<label>${esc(k.replace(/_/g, ' ').toLowerCase().replace(/^./, c => c.toUpperCase()).replace(/\bgst\b/gi, 'GST'))}<input class="s-field" data-key="${k}" value="${esc(v)}" /></label>`).join('')}
       </div>
       <div class="actions-row"><button id="save-settings">Save Settings</button></div>
+    </div>
+    <div class="card">
+      <div class="flex-between"><h3>Usage data source</h3>
+        ${ds.configured ? `<span class="badge locked">${esc(ds.dialect)} · ${esc(ds.host)}</span>` : '<span class="badge draft">not configured</span>'}</div>
+      <p class="muted">Monthly billing reads usage from this database. The connection string lives in the server environment (<code>USAGE_DATABASE_URL</code>) and is never shown here — use a read-only database user. Queries must be a single <code>SELECT</code> and can use <code>:period_start</code> / <code>:period_end</code>.</p>
+      ${['loading', 'upi', 'users'].map(k => `<label>${{ loading: 'Loading — returns enterprise_id, amount', upi: 'UPI — returns enterprise_id, txn_count, txn_amount', users: 'Users — returns enterprise_id, admin_users, spender_users, total_users' }[k]}
+        <textarea class="ds-q mono" data-k="${k}" rows="6" ${isAdmin ? '' : 'readonly'}>${esc(ds.queries[k])}</textarea></label>`).join('')}
+      <div class="actions-row">
+        ${isAdmin ? '<button id="ds-save">Save queries</button><button class="ghost" id="ds-reset">Reset to defaults</button>' : '<span class="muted">Only an admin can edit these queries.</span>'}
+        <input type="month" id="ds-period" value="${new Date().toISOString().slice(0, 7)}" />
+        <button class="ghost" id="ds-test" ${ds.configured ? '' : 'disabled'} title="Tests the saved queries"><i class="fa-solid fa-vial"></i> Test saved queries</button>
+      </div>
+      <div id="ds-test-result"></div>
     </div>
     <div class="card">
       <h3>Integration Status</h3>
@@ -994,6 +1163,21 @@ async function renderSettings(content) {
     const values = {};
     content.querySelectorAll('.s-field').forEach(el => values[el.dataset.key] = el.value);
     try { await Apx.putSettings(values); toast('Settings saved'); } catch (e) { toast(e.message, true); }
+  });
+  const readQueries = () => Object.fromEntries([...content.querySelectorAll('.ds-q')].map(el => [el.dataset.k, el.value]));
+  document.getElementById('ds-save')?.addEventListener('click', async () => {
+    try { await Apx.saveDatasource(readQueries()); toast('Queries saved'); } catch (e) { toast(e.message, true); }
+  });
+  document.getElementById('ds-reset')?.addEventListener('click', () => {
+    content.querySelectorAll('.ds-q').forEach(el => { el.value = ds.defaults[el.dataset.k]; });
+    toast('Defaults restored — click Save to keep them');
+  });
+  document.getElementById('ds-test').addEventListener('click', async () => {
+    const box = document.getElementById('ds-test-result');
+    box.innerHTML = '<p class="muted"><i class="fa-solid fa-spinner fa-spin"></i> Querying…</p>';
+    try {
+      box.innerHTML = renderDatasourceTest((await Apx.testDatasource(document.getElementById('ds-period').value)).results);
+    } catch (e) { box.innerHTML = ''; toast(e.message, true); }
   });
 }
 

@@ -1,0 +1,36 @@
+# BillingOS roadmap — beyond Zoho Books
+
+Goal: everything Zoho Books does for a B2B billing team, plus the automation Zoho can't do because it
+doesn't own your usage data. Ordered by value to this business, not by Zoho's menu.
+
+## Done
+- **Terms, finance-only.** Only the Finance role can create, edit, lock or unlock billing terms, via manual entry,
+  import from a reviewed agreement, or bulk Excel. Every change records source and who/when.
+- **Usage from the database** (replaces monthly CSVs; CSV kept as fallback). Read-only, SELECT-only, queries editable by admin.
+- **Customer master data.** Identity, tax (GST treatment, PAN, TAN, CIN, MSME), address, contacts, CC emails,
+  currency, per-customer payment terms, credit limit, account manager, status. Bulk import/update/export (Excel/CSV).
+- Already present: slab billing engine, GST/TDS, invoice PDF + email, bank reconciliation, aging, reminders, credit notes, statements, CRM sync, audit log.
+
+## Phase 2 — close the order-to-cash loop (highest value)
+1. **Approval workflow** on billing runs: maker (accounts) → checker (finance), thresholds, auto-approve rules, rejection reasons.
+2. **Scheduled runs:** auto-pull on the 1st, auto-issue after approval, auto-send, auto-remind on a dunning ladder (T-3, T+1, T+7, T+15) per customer.
+3. **Usage anomaly checks** before billing: month-on-month swing, zero usage on an active customer, usage with no terms, unknown enterprise IDs.
+4. **Customer portal / pay links:** invoice view, UPI/NEFT details, dispute button, statement download, payment promise date.
+5. **Credit control:** enforce credit limit, auto-flag/block on overdue beyond N days, expected-collections forecast.
+
+## Phase 3 — Zoho Books parity
+- **Sales:** quotes/estimates, sales orders, recurring invoices, proforma, delivery challans, debit notes, advance receipts & retainers, customer credits applied to invoices, write-offs.
+- **Purchases (AP):** vendors, bills, vendor credits, purchase orders, payments made, expense claims, recurring bills.
+- **Accounting:** chart of accounts, manual journals, opening balances, multi-currency with exchange-rate gains/losses, bank feeds + rules, period locking, fixed assets.
+- **India compliance:** GSTR-1 / GSTR-3B data, e-invoicing (IRN + QR), e-way bill, TDS/TCS tracking + Form 26AS reconciliation, HSN/SAC master, reverse charge.
+- **Reports:** P&L, balance sheet, cash flow, trial balance, aged AR/AP, GST summary, sales by customer/product, budget vs actual.
+- **Inventory/items:** item catalogue, price lists, taxes, units.
+- **Platform:** multi-organisation, granular roles/permissions, custom fields, templates (invoice/email), webhooks + public API, document attachments, import/export for every module.
+
+## Phase 4 — beyond Zoho (our edge, because we own usage + terms)
+- **Revenue intelligence:** MRR/ARR by customer, usage trend, churn-risk (falling usage), expansion signals, slab-threshold alerts ("customer is ₹40k from the next tier").
+- **What-if pricing:** simulate a rate/slab change against last N months of real usage before amending terms.
+- **Contract lifecycle:** renewal calendar, auto-escalation on anniversary (already modelled), expiry alerts, amendment history diff.
+- **Leakage detection:** usage billed vs usage consumed, customers with usage but no locked terms, terms never invoiced.
+- **Cash application AI:** learn from past matches to raise auto-match confidence; split/partial/advance handling.
+- **Accounting sync:** two-way Zoho Books / Tally push for GL, so finance keeps its books of record if desired.

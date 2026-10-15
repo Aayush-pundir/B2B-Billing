@@ -10,10 +10,13 @@ from app.models import User
 
 COOKIE_NAME = "cb_token"
 ROLES = ["admin", "accounts", "finance", "sales", "viewer"]
+# Billing terms ("commercials") are amended by the finance role only — through
+# manual entry, import from a reviewed agreement, or bulk Excel upload. Admin
+# manages users and system settings but deliberately cannot change terms.
 ROLE_WRITE_ACCESS = {
-    "admin": {"clients", "commercials", "agreements", "billing", "settings", "users", "metrics", "addons"},
-    "accounts": {"clients", "commercials", "agreements", "billing"},
-    "finance": {"billing"},
+    "admin": {"clients", "agreements", "settings", "users", "metrics", "addons", "datasource"},
+    "accounts": {"clients", "agreements", "billing"},
+    "finance": {"clients", "agreements", "billing", "commercials", "metrics", "addons"},
     "sales": set(),
     "viewer": set(),
 }
@@ -74,3 +77,12 @@ def bootstrap_or_get_user(db: Session, email: str, requested_role: str = "viewer
     user.last_login = datetime.datetime.utcnow()
     db.commit()
     return user
+
+
+def require_any_write(*entities: str):
+    def checker(user: User = Depends(require_user)) -> User:
+        allowed = ROLE_WRITE_ACCESS.get(user.role, set())
+        if not any(e in allowed for e in entities):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Role '{user.role}' cannot access this")
+        return user
+    return checker
