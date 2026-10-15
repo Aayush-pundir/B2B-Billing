@@ -144,6 +144,11 @@ const Apx = {
   gstExportUrl: (start, end) => `${API_BASE}/api/finance/reports/gst/export?start=${start}&end=${end}`,
   integrity: () => request('/api/finance/integrity'),
 
+  // billing engine v2
+  v2: (path, opts) => request('/api/v2' + path, opts),
+  v2form: (path, file, params = '') => { const fd = new FormData(); fd.append('file', file); return request('/api/v2' + path + params, { method: 'POST', body: fd, isForm: true }); },
+  v2mappingTemplateUrl: () => `${API_BASE}/api/v2/import/mapping-template`,
+
   // approvals
   approveRun: (id, acknowledgeHigh) => request(`/api/billing/runs/${id}/approve`, { method: 'POST', body: { acknowledge_high: acknowledgeHigh } }),
   rejectRun: (id, reason) => request(`/api/billing/runs/${id}/reject`, { method: 'POST', body: { reason } }),

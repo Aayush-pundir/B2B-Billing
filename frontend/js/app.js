@@ -9,7 +9,8 @@ const PAGES = [
   { id: 'clients', label: 'Customers', icon: 'fa-building', group: 'Setup', sub: 'Customer master data — identity, tax, contacts and billing preferences' },
   { id: 'items', label: 'Items', icon: 'fa-box', group: 'Setup', sub: 'Products and services you sell — HSN/SAC, rate and GST' },
   { id: 'agreements', label: 'Agreements', icon: 'fa-file-lines', group: 'Setup', sub: 'Upload contracts and extract commercial terms' },
-  { id: 'commercials', label: 'Commercials', icon: 'fa-sliders', group: 'Setup', sub: 'Billing terms — amended by Finance only, via manual entry, agreements or Excel' },
+  { id: 'accounts', label: 'Billing accounts', icon: 'fa-building-user', group: 'Setup', sub: 'Contracts, lifecycle, groups and usage — the billing engine v2 workspace' },
+  { id: 'commercials', label: 'Commercials (v1)', icon: 'fa-sliders', group: 'Setup', sub: 'Simple billing terms for customers not yet on billing accounts' },
   { id: 'billing', label: 'Billing', icon: 'fa-file-invoice-dollar', group: 'Billing', sub: 'Run the monthly billing cycle from live usage data' },
   { id: 'sales', label: 'Sales documents', icon: 'fa-file-circle-plus', group: 'Billing', sub: 'Ad-hoc invoices, quotes, recurring invoices, debit notes and receipts' },
   { id: 'invoices', label: 'Invoices', icon: 'fa-receipt', group: 'Billing', sub: 'Issue, send and track invoices' },
@@ -1398,6 +1399,6 @@ const RENDERERS = {
   audit: renderAudit,
   settings: renderSettings,
 };
-Object.assign(RENDERERS, MODULE_RENDERERS);
+Object.assign(RENDERERS, MODULE_RENDERERS, V2_RENDERERS);
 
 boot();

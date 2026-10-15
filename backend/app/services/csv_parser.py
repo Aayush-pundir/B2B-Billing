@@ -83,6 +83,9 @@ def parse_users_csv(raw: bytes) -> dict[str, dict[str, float]]:
             "admin_users": admin_users,
             "spender_users": spender_users,
             "total_users": total_users,
+            "maker_users": _num(row, "MAKER"),
+            "checker_users": _num(row, "CHECKER"),
+            "approver_users": _num(row, "APPROVER"),
         }
     return result
 

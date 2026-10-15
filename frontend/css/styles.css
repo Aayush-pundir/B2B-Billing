@@ -414,6 +414,8 @@ tr.total-row td { font-weight: 700; background: var(--surface-2); border-top: 1p
 h4 { font-family: 'Geist', sans-serif; font-size: .78rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 1.1rem 0 .4rem; }
 @media (max-width: 760px) { .line-row, .line-row.bill-row, .line-row.je-row { grid-template-columns: 1fr 1fr; } .l-rm { grid-column: span 2; } }
 
+.comp.card { background: var(--surface-2); margin-bottom: .8rem; } .comp .c-type { max-width: 320px; } .comp textarea { min-height: 70px; }
+
 /* ---------- Responsive ---------- */
 @media (max-width: 960px) {
   .login-wrap { grid-template-columns: 1fr; } .login-hero { display: none; }

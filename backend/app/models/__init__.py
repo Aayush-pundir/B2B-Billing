@@ -478,3 +478,209 @@ class RecurringInvoice(Base):
     created_at = Column(DateTime, default=now)
 
     client = relationship("Client")
+
+
+# --------------------------------------------------------------------------
+# Billing engine v2 — accounts, versioned contracts, lifecycle, groups, snapshots
+# --------------------------------------------------------------------------
+
+class BillingAccount(Base):
+    """The invoiceable customer. Links to the customer master (Client) that invoices,
+    the portal, reminders and the ledger already use; one account may bill several
+    platform enterprises (see AccountEnterprise)."""
+    __tablename__ = "billing_accounts"
+
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, unique=True)
+    display_name = Column(String, nullable=False)
+    zoho_billing_name = Column(String, default="")
+    kam = Column(String, default="")
+    sales_manager = Column(String, default="")
+    go_live_date = Column(String, nullable=True)
+    auto_debit = Column(Boolean, default=True)
+    source_row = Column(Integer, nullable=True)  # row in the legacy revenue sheet
+    import_flags = Column(JSON, default=list)  # data-quality flags carried over from the legacy sheet
+    notes = Column(Text, default="")
+    created_at = Column(DateTime, default=now)
+    updated_at = Column(DateTime, default=now, onupdate=now)
+
+    client = relationship("Client")
+    enterprises = relationship("AccountEnterprise", back_populates="account", cascade="all, delete-orphan")
+    contracts = relationship("Contract", back_populates="account", cascade="all, delete-orphan")
+    events = relationship("AccountEvent", back_populates="account", cascade="all, delete-orphan")
+
+
+class AccountEnterprise(Base):
+    __tablename__ = "account_enterprises"
+
+    id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("billing_accounts.id"), nullable=False)
+    enterprise_id = Column(String, nullable=False, index=True)  # platform id: ENTP… / FLTP…
+    role = Column(String, default="primary")  # primary | secondary
+    include_add_money = Column(Boolean, default=True)
+    include_upi = Column(Boolean, default=True)
+    include_users = Column(Boolean, default=True)
+    valid_from = Column(String, nullable=True)
+    valid_to = Column(String, nullable=True)
+
+    account = relationship("BillingAccount", back_populates="enterprises")
+
+
+class Contract(Base):
+    __tablename__ = "contracts"
+
+    id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("billing_accounts.id"), nullable=False)
+    version = Column(Integer, default=1)
+    valid_from = Column(String, nullable=False)
+    valid_to = Column(String, nullable=True)
+    billing_frequency = Column(String, default="monthly")
+    gst_mode = Column(String, default="exclusive")
+    gst_rate = Column(Float, default=0.18)
+    overall_min_amount = Column(Float, nullable=True)
+    overall_cap_amount = Column(Float, nullable=True)
+    mg_effective_from = Column(String, nullable=True)
+    prorate_mg = Column(Boolean, default=False)
+    subscription_covers = Column(JSON, default=lambda: ["A"])  # component groups a subscription invoice covers
+    status = Column(String, default="draft")  # draft | locked | superseded
+    source = Column(String, default="manual")  # manual | import | escalation
+    notes = Column(Text, default="")
+    signed_doc_url = Column(String, default="")
+    created_by = Column(String, default="")
+    approved_by = Column(String, default="")
+    approved_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=now)
+
+    account = relationship("BillingAccount", back_populates="contracts")
+    components = relationship("ContractComponent", back_populates="contract", cascade="all, delete-orphan", order_by="ContractComponent.sort_order")
+
+
+class ContractComponent(Base):
+    __tablename__ = "contract_components"
+
+    id = Column(Integer, primary_key=True)
+    contract_id = Column(Integer, ForeignKey("contracts.id"), nullable=False)
+    component_type = Column(String, nullable=False)
+    label = Column(String, default="")
+    params = Column(JSON, default=dict)
+    valid_from = Column(String, nullable=True)
+    valid_to = Column(String, nullable=True)
+    sort_order = Column(Integer, default=0)
+
+    contract = relationship("Contract", back_populates="components")
+
+
+class EscalationRule(Base):
+    __tablename__ = "escalation_rules"
+
+    id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("billing_accounts.id"), nullable=False)
+    applies_to = Column(String, default="all")  # 'all' or a component_type
+    kind = Column(String, default="percent")  # percent | fixed_increment
+    value = Column(Float, default=0.10)
+    anniversary_basis = Column(String, default="go_live")  # go_live | contract_start | fixed_date
+    next_date = Column(String, nullable=True)
+    last_applied_date = Column(String, nullable=True)
+    requires_approval = Column(Boolean, default=True)
+    active = Column(Boolean, default=True)
+    note = Column(String, default="")
+
+
+class BillingGroup(Base):
+    __tablename__ = "billing_groups"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    kind = Column(String, default="net_parent")  # net_parent | equal_split | pooled | per_entity_min
+    group_min_amount = Column(Float, nullable=True)
+    rate = Column(Float, nullable=True)  # load rate for net_parent group (0.008 = 0.8%)
+    pool_load = Column(Boolean, default=False)  # net_parent: use the pooled Add Money of all members (vs parent only)
+    units = Column(Integer, nullable=True)  # per_entity_min: number of units sharing the minimum
+    subtract = Column(String, default="A")  # net_parent: subtract members' 'A' (platform) amounts or their full 'taxable'
+    notes = Column(Text, default="")
+
+
+class BillingGroupMember(Base):
+    __tablename__ = "billing_group_members"
+
+    id = Column(Integer, primary_key=True)
+    group_id = Column(Integer, ForeignKey("billing_groups.id"), nullable=False)
+    account_id = Column(Integer, ForeignKey("billing_accounts.id"), nullable=False)
+    is_parent = Column(Boolean, default=False)
+
+
+class SubscriptionInvoice(Base):
+    """Periodic (annual / quarterly / half-yearly) advance invoices — history and schedule."""
+    __tablename__ = "subscription_invoices"
+
+    id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("billing_accounts.id"), nullable=True)
+    particulars = Column(String, default="")  # name as written in the register (kept when unmapped)
+    frequency = Column(String, default="annual")
+    bill_month = Column(String, nullable=True)
+    period_start = Column(String, nullable=True)
+    period_end = Column(String, nullable=True)
+    amount = Column(Float, default=0.0)
+    description = Column(String, default="Annual Subscription")
+    zoho_invoice_id = Column(String, nullable=True)
+    status = Column(String, default="raised")  # raised | cancelled | credit_noted
+    source_row = Column(Integer, nullable=True)
+
+
+class AccountEvent(Base):
+    """Dated lifecycle / status events — replaces the free-text status remarks."""
+    __tablename__ = "account_events"
+
+    id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("billing_accounts.id"), nullable=False)
+    event_type = Column(String, nullable=False)
+    effective_from = Column(String, nullable=True)
+    effective_to = Column(String, nullable=True)
+    payload = Column(JSON, default=dict)
+    source_text = Column(String, default="")
+    created_by = Column(String, default="")
+    created_at = Column(DateTime, default=now)
+
+    account = relationship("BillingAccount", back_populates="events")
+
+
+class UsageSnapshot(Base):
+    """Frozen monthly metrics per platform enterprise. NULL = not supplied (distinct from 0)."""
+    __tablename__ = "usage_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    period = Column(String, nullable=False, index=True)
+    enterprise_id = Column(String, nullable=False, index=True)
+    add_money = Column(Float, nullable=True)
+    upi_txn_count = Column(Float, nullable=True)
+    upi_txn_amount = Column(Float, nullable=True)
+    upi_cnt_le_2500 = Column(Float, nullable=True)
+    upi_amt_gt_2500 = Column(Float, nullable=True)
+    upi_spend_after_free = Column(Float, nullable=True)
+    card_share_pct = Column(Float, nullable=True)
+    maker_count = Column(Float, nullable=True)
+    admin_count = Column(Float, nullable=True)  # Admin + Co-admin
+    checker_count = Column(Float, nullable=True)
+    approver_count = Column(Float, nullable=True)
+    truck_count = Column(Float, nullable=True)
+    driver_count = Column(Float, nullable=True)
+    source = Column(String, default="database")  # database | csv | manual
+    manual_fields = Column(JSON, default=list)  # fields typed by hand (flagged MANUAL_INPUT)
+    frozen = Column(Boolean, default=False)
+    extracted_at = Column(DateTime, default=now)
+
+
+class BillingException(Base):
+    __tablename__ = "billing_exceptions"
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey("billing_runs.id"), nullable=True)
+    account_id = Column(Integer, nullable=True)
+    code = Column(String, nullable=False)
+    severity = Column(String, default="medium")  # high | medium | low | info
+    message = Column(Text, default="")
+    blocks = Column(Boolean, default=False)  # true = this account's invoice is withheld
+    status = Column(String, default="open")  # open | resolved | waived
+    resolved_by = Column(String, default="")
+    resolved_note = Column(String, default="")
+    created_at = Column(DateTime, default=now)

@@ -11,10 +11,10 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Agreement, BillingRun, Client, Commercial, CreditNote, Invoice, Payment, User
-from app.services import anomalies, csv_parser, invoicing, settings_store, usage_db, zoho
+from app.models import Agreement, BillingAccount, BillingException, BillingRun, Client, Commercial, CreditNote, Invoice, Payment, User
+from app.services import anomalies, billing_v2, csv_parser, invoicing, settings_store, snapshots as usage_snapshots, usage_db, zoho
 from app.services.auth import require_user, require_write
-from app.services.engine import compute_invoice
+from app.services.engine import compute_invoice, gst_breakup
 from app.routers.core_routes import log_action
 
 router = APIRouter(prefix="/api/billing")
@@ -46,9 +46,34 @@ class RunExists(Exception):
     pass
 
 
+def _v2_invoice_result(v2: dict, client, org_state_code: str, tds_rate: float) -> tuple[dict | None, str | None]:
+    """Turn a billing-v2 account result into the invoice shape used by runs, or explain why it is not invoiced."""
+    if not v2["billable"]:
+        return None, v2["life"]["reason"] or "not billable"
+    blocking = sorted({e["code"] for e in v2["exceptions"] if e["blocks"]})
+    if blocking:
+        return None, "withheld: " + ", ".join(blocking)
+    sub = float(v2["subtotal"])
+    if sub <= 0:
+        return None, "nothing to bill (no usage and no fixed commitment)"
+    gb = gst_breakup(sub, client.state_code, org_state_code, (v2["contract"].gst_rate or 0.18) * 100)
+    tds = round(sub * tds_rate / 100.0, 2)
+    lines = []
+    for l in v2["lines"]:
+        if l["amount"] == 0 and "covered_by_subscription" not in l.get("flags", []):
+            continue
+        lines.append({"label": l["label"], "metric": l["component_type"], "qty": float(l["qty"]) if l.get("qty") is not None else 1,
+                      "calc_detail": l.get("detail", ""), "amount": float(l["amount"]), "component_type": l["component_type"],
+                      "trace": {"component_type": l["component_type"], "params": l.get("params", {}), "detail": l.get("detail", ""),
+                                "contract_version": v2["contract"].version, "usage": {k: float(x) for k, x in v2["usage"].items() if x is not None},
+                                "flags": l.get("flags", [])}})
+    return {"lines": lines, "subtotal": sub, "gst_type": gb["gst_type"], "gst": gb["gst_total"], "tds": tds,
+            "total": round(sub + gb["gst_total"] - tds, 2)}, None
+
+
 def _generate_run(db: Session, user, period: str, tds_rate: float, confirm_ids: set[str],
                   usage_by_client: dict, unknown_ids: list[str], source: str,
-                  force: bool = False, trigger: str = "manual") -> dict:
+                  force: bool = False, trigger: str = "manual", snaps: dict | None = None) -> dict:
     """Shared by the database pull, the CSV fallback and the scheduler: turn
     per-client usage into draft invoices using each client's locked terms, run
     the anomaly checks, then route the run through the approval policy."""
@@ -70,6 +95,10 @@ def _generate_run(db: Session, user, period: str, tds_rate: float, confirm_ids: 
     db.commit()
     db.refresh(run)
 
+    v2_out = {"results": {}, "run_exceptions": []}
+    if db.query(BillingAccount).first() is not None:
+        v2_out = billing_v2.compute_run(db, period, snaps if snaps is not None else usage_snapshots.load(db, period), {c.id: c for c in clients})
+
     invoices_out = []
     skipped = []
     billed: dict[str, float] = {}
@@ -77,21 +106,30 @@ def _generate_run(db: Session, user, period: str, tds_rate: float, confirm_ids: 
         if (client.status or "active") != "active":
             skipped.append({"enterprise_id": client.enterprise_id, "reason": f"customer is {client.status}"})
             continue
-        commercial = db.query(Commercial).filter(Commercial.client_id == client.id, Commercial.status == "locked").first()
-        if commercial is None:
-            skipped.append({"enterprise_id": client.enterprise_id, "reason": "no locked commercial"})
-            continue
-        due, reason = _is_annual_due(client, commercial, period, confirm_ids)
-        if not due:
-            skipped.append({"enterprise_id": client.enterprise_id, "reason": reason})
-            continue
-        usage = usage_by_client.get(client.enterprise_id, {
-            "loading": 0, "upi_transactions": 0, "upi_amount": 0, "admin_users": 0, "spender_users": 0, "total_users": 0,
-        })
-        result = compute_invoice(commercial.rules or [], usage, client.state_code, org_state_code, gst_rate, tds_rate, is_annual_due=True)
-        if not result["lines"] or result["subtotal"] <= 0:
-            skipped.append({"enterprise_id": client.enterprise_id, "reason": "zero usage / no billable lines"})
-            continue
+        v2 = v2_out["results"].get(client.id)
+        commercial = None
+        if v2 is not None:
+            result, why = _v2_invoice_result(v2, client, org_state_code, tds_rate)
+            if why:
+                skipped.append({"enterprise_id": client.enterprise_id, "reason": why})
+                continue
+        else:
+            commercial = db.query(Commercial).filter(Commercial.client_id == client.id, Commercial.status == "locked").first()
+            if commercial is None:
+                skipped.append({"enterprise_id": client.enterprise_id, "reason": "no locked commercial"})
+                continue
+            due, reason = _is_annual_due(client, commercial, period, confirm_ids)
+            if not due:
+                skipped.append({"enterprise_id": client.enterprise_id, "reason": reason})
+                continue
+            usage = usage_by_client.get(client.enterprise_id, {
+                "loading": 0, "upi_transactions": 0, "upi_amount": 0, "admin_users": 0, "spender_users": 0, "total_users": 0,
+            })
+            result = compute_invoice(commercial.rules or [], usage, client.state_code, org_state_code, gst_rate, tds_rate, is_annual_due=True)
+            if not result["lines"] or result["subtotal"] <= 0:
+                skipped.append({"enterprise_id": client.enterprise_id, "reason": "zero usage / no billable lines"})
+                continue
+
 
         invoice_no = _next_invoice_no(db, prefix)
         terms_days = int(client.payment_terms_days or default_terms)
@@ -105,7 +143,7 @@ def _generate_run(db: Session, user, period: str, tds_rate: float, confirm_ids: 
         db.add(invoice)
         db.flush()  # keep invoice numbering unique within the run
 
-        if client.billing_frequency == "annual" and not commercial.first_invoice_date:
+        if commercial is not None and client.billing_frequency == "annual" and not commercial.first_invoice_date:
             commercial.first_invoice_date = f"{period}-06"
 
         invoices_out.append(invoice_no)
@@ -113,6 +151,19 @@ def _generate_run(db: Session, user, period: str, tds_rate: float, confirm_ids: 
 
     found = anomalies.detect(db, period, clients, usage_by_client, unknown_ids, billed, skipped,
                              float(automation["ANOMALY_SWING_PCT"] or 50))
+    names = {c.id: c for c in clients}
+    sev = {"high": "high", "medium": "medium", "low": "low", "info": "low"}
+    for cid, r in v2_out["results"].items():
+        for e in r["exceptions"]:
+            db.add(BillingException(run_id=run.id, account_id=r["account"].id, code=e["code"], severity=e["severity"], message=e["message"], blocks=e["blocks"]))
+            if e["severity"] != "info":
+                found.append({"severity": sev[e["severity"]], "code": e["code"], "enterprise_id": names[cid].enterprise_id, "message": e["message"]})
+    for e in v2_out["run_exceptions"]:
+        db.add(BillingException(run_id=run.id, account_id=None, code=e["code"], severity=e["severity"], message=e["message"], blocks=False))
+        if e["severity"] != "info":
+            found.append({"severity": sev[e["severity"]], "code": e["code"], "enterprise_id": "—", "message": e["message"]})
+    order = {"high": 0, "medium": 1, "low": 2}
+    found.sort(key=lambda a: (order[a["severity"]], a["enterprise_id"]))
     run_total = round(sum(i.total for i in run.invoices) if run.invoices else 0.0, 2)
     run.summary = {
         "invoices_generated": len(invoices_out), "skipped": skipped, "unknown_enterprise_ids": unknown_ids,
@@ -127,12 +178,13 @@ def _generate_run(db: Session, user, period: str, tds_rate: float, confirm_ids: 
         run.status, run.auto_approved, run.approved_by = "approved", True, "policy: approval not required"
     else:
         limit = float(automation["AUTO_APPROVE_MAX_TOTAL"] or 0)
-        if limit > 0 and run_total <= limit and not found and invoices_out:
+        if limit > 0 and run_total <= limit and not [a for a in found if a['severity'] != 'low'] and invoices_out:
             run.status, run.auto_approved, run.approved_by = "approved", True, f"policy: clean run under ₹{limit:,.0f}"
         else:
             run.status = "pending_approval"
     if run.status == "approved":
         run.approved_at = datetime.datetime.utcnow()
+        usage_snapshots.freeze(db, period)
         if settings_store.is_yes(automation["AUTO_ISSUE_ON_APPROVAL"]):
             db.flush()
             finalized = invoicing.finalize_run(db, run)
@@ -149,7 +201,10 @@ def run_from_database(db: Session, user, period: str, tds_rate: float, confirm_i
     loading, upi, users = usage_db.fetch_usage(db, period)
     known_ids = {c.enterprise_id for c in db.query(Client).all()}
     usage_by_client, unknown_ids = csv_parser.aggregate_usage(loading, upi, users, known_ids)
-    return _generate_run(db, user, period, tds_rate, confirm_ids, usage_by_client, unknown_ids, "database", force=force, trigger=trigger)
+    if db.query(BillingAccount).first() is not None:  # v2 accounts read frozen per-enterprise snapshots
+        usage_snapshots.save(db, period, usage_db.fetch_snapshot_rows(db, period), "database")
+    return _generate_run(db, user, period, tds_rate, confirm_ids, usage_by_client, unknown_ids, "database", force=force, trigger=trigger,
+                         snaps=usage_snapshots.load(db, period))
 
 
 @router.post("/calculate-db")
@@ -190,8 +245,10 @@ async def calculate_billing(
     known_ids = {c.enterprise_id for c in db.query(Client).all()}
     usage_by_client, unknown_ids = csv_parser.aggregate_usage(loading, upi, users, known_ids)
     confirm_ids = {x.strip() for x in confirm_annual.split(",") if x.strip()}
+    usage_snapshots.save(db, period, usage_snapshots.from_csv(loading, upi, users), "csv")
     try:
-        return _generate_run(db, user, period, tds_rate, confirm_ids, usage_by_client, unknown_ids, "csv", force=force)
+        return _generate_run(db, user, period, tds_rate, confirm_ids, usage_by_client, unknown_ids, "csv", force=force,
+                             snaps=usage_snapshots.load(db, period))
     except RunExists as exc:
         raise HTTPException(409, str(exc))
 
@@ -245,6 +302,7 @@ def approve_run(run_id: int, payload: ApproveIn, db: Session = Depends(get_db), 
     if high and not payload.acknowledge_high:
         raise HTTPException(409, f"{len(high)} high-severity finding(s) must be acknowledged before approving")
     run.status, run.approved_by, run.approved_at = "approved", user.email, datetime.datetime.utcnow()
+    usage_snapshots.freeze(db, run.period)
     finalized = None
     if settings_store.is_yes(automation["AUTO_ISSUE_ON_APPROVAL"]):
         finalized = invoicing.finalize_run(db, run)

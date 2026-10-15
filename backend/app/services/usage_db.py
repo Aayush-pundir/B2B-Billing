@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.models import Setting
 
-QUERY_KEYS = {"loading": "USAGE_QUERY_LOADING", "upi": "USAGE_QUERY_UPI", "users": "USAGE_QUERY_USERS"}
+QUERY_KEYS = {"loading": "USAGE_QUERY_LOADING", "upi": "USAGE_QUERY_UPI", "users": "USAGE_QUERY_USERS", "extras": "USAGE_QUERY_EXTRAS"}
 
 # Defaults mirror the former CSV rules. Table and column names are a starting
 # point — an admin adapts them to the real schema on the Settings page.
@@ -36,7 +36,9 @@ WHERE transaction_category = 'Add Money'
   AND status = 'COMPLETED'
   AND transaction_date >= :period_start AND transaction_date < :period_end
 GROUP BY enterprise_id""",
-    "upi": """SELECT enterprise_id, COUNT(*) AS txn_count, SUM(total_trxn_amount) AS txn_amount
+    "upi": """SELECT enterprise_id, COUNT(*) AS txn_count, SUM(total_trxn_amount) AS txn_amount,
+       SUM(CASE WHEN total_trxn_amount <= 2500 THEN 1 ELSE 0 END) AS cnt_le_2500,
+       SUM(CASE WHEN total_trxn_amount > 2500 THEN total_trxn_amount ELSE 0 END) AS amt_gt_2500
 FROM upi_transactions
 WHERE transaction_type = 'DEBIT'
   AND status = 'COMPLETED'
@@ -46,10 +48,16 @@ GROUP BY enterprise_id""",
     "users": """SELECT enterprise_id,
        SUM(CASE WHEN role IN ('ADMIN', 'CO_ADMIN') THEN 1 ELSE 0 END) AS admin_users,
        SUM(CASE WHEN role IN ('CHECKER', 'APPROVER', 'MAKER') THEN 1 ELSE 0 END) AS spender_users,
+       SUM(CASE WHEN role = 'MAKER' THEN 1 ELSE 0 END) AS maker_users,
+       SUM(CASE WHEN role = 'CHECKER' THEN 1 ELSE 0 END) AS checker_users,
+       SUM(CASE WHEN role = 'APPROVER' THEN 1 ELSE 0 END) AS approver_users,
        COUNT(*) AS total_users
 FROM enterprise_users
 WHERE status = 'ACTIVE'
 GROUP BY enterprise_id""",
+    # Optional. Leave empty if not needed. May return: card_share_pct, upi_spend_after_free,
+    # truck_count, driver_count (fleet / spend-based contracts).
+    "extras": "",
 }
 
 _FORBIDDEN = re.compile(
@@ -100,16 +108,21 @@ def validate_query(sql: str) -> str:
     return cleaned
 
 
+def optional(name: str) -> bool:
+    return name == "extras"
+
+
 def get_queries(db: Session) -> dict[str, str]:
     rows = {r.key: r.value for r in db.query(Setting).filter(Setting.key.in_(QUERY_KEYS.values())).all()}
-    return {name: rows.get(key) or DEFAULT_QUERIES[name] for name, key in QUERY_KEYS.items()}
+    return {name: (rows[key] if key in rows else DEFAULT_QUERIES[name]) if optional(name) else (rows.get(key) or DEFAULT_QUERIES[name])
+            for name, key in QUERY_KEYS.items()}
 
 
 def save_queries(db: Session, queries: dict[str, str]) -> dict[str, str]:
     for name, sql in queries.items():
         if name not in QUERY_KEYS:
             continue
-        sql = validate_query(sql)
+        sql = "" if (optional(name) and not (sql or "").strip()) else validate_query(sql)
         key = QUERY_KEYS[name]
         row = db.query(Setting).filter(Setting.key == key).first()
         if row is None:
@@ -186,10 +199,54 @@ def fetch_usage(db: Session, period: str) -> tuple[dict, dict, dict]:
 def test_queries(db: Session, period: str) -> dict:
     out = {}
     for name, sql in get_queries(db).items():
+        if optional(name) and not sql.strip():
+            continue
         try:
             rows, secs = _run(sql, period, limit=200)
             out[name] = {"ok": True, "rows": len(rows), "seconds": secs, "columns": list(rows[0].keys()) if rows else [],
                          "sample": [{k: (float(v) if isinstance(v, (int, float)) else str(v)) for k, v in r.items()} for r in rows[:5]]}
         except UsageDbError as exc:
             out[name] = {"ok": False, "error": str(exc)}
+    return out
+
+
+# snapshot column -> (query, result column)
+_SNAPSHOT_COLUMNS = {
+    "add_money": ("loading", "amount"),
+    "upi_txn_count": ("upi", "txn_count"), "upi_txn_amount": ("upi", "txn_amount"),
+    "upi_cnt_le_2500": ("upi", "cnt_le_2500"), "upi_amt_gt_2500": ("upi", "amt_gt_2500"),
+    "admin_count": ("users", "admin_users"), "maker_count": ("users", "maker_users"),
+    "checker_count": ("users", "checker_users"), "approver_count": ("users", "approver_users"),
+    "card_share_pct": ("extras", "card_share_pct"), "upi_spend_after_free": ("extras", "upi_spend_after_free"),
+    "truck_count": ("extras", "truck_count"), "driver_count": ("extras", "driver_count"),
+}
+
+
+def fetch_snapshot_rows(db: Session, period: str) -> dict[str, dict]:
+    """Per-enterprise metrics for the period, keyed by enterprise_id. A column the query returns
+    is 0 for enterprises absent from its result (no activity); a column the query does NOT return
+    stays None ("not supplied") so the engine can flag it instead of silently billing zero."""
+    q = get_queries(db)
+    out: dict[str, dict] = {}
+    for name in ("loading", "upi", "users", "extras"):
+        if not q[name].strip():
+            continue
+        rows, _ = _run(q[name], period)
+        cols = {k.lower() for r in rows[:1] for k in r} if rows else set()
+        if not rows:  # an empty result still "supplies" its columns as zero for everyone seen elsewhere
+            cols = {c for (qn, c) in _SNAPSHOT_COLUMNS.values() if qn == name}
+        for r in rows:
+            eid = _eid(r)
+            lower = {k.lower(): v for k, v in r.items()}
+            row = out.setdefault(eid, {})
+            for field, (qn, col) in _SNAPSHOT_COLUMNS.items():
+                if qn == name and col in lower:
+                    row[field] = row.get(field, 0.0) + _num(lower[col]) if field not in ("card_share_pct",) else _num(lower[col])
+        out.setdefault("__supplied__", {}).setdefault(name, sorted(cols))
+    supplied = out.pop("__supplied__", {})
+    # enterprises seen anywhere get 0 for every column of every query that ran
+    for eid, row in out.items():
+        for field, (qn, col) in _SNAPSHOT_COLUMNS.items():
+            if qn in supplied and col in supplied[qn] and field not in row:
+                row[field] = 0.0
     return out
