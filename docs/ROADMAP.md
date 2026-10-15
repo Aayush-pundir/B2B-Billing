@@ -11,12 +11,12 @@ doesn't own your usage data. Ordered by value to this business, not by Zoho's me
   currency, per-customer payment terms, credit limit, account manager, status. Bulk import/update/export (Excel/CSV).
 - Already present: slab billing engine, GST/TDS, invoice PDF + email, bank reconciliation, aging, reminders, credit notes, statements, CRM sync, audit log.
 
-## Phase 2 — close the order-to-cash loop (highest value)
-1. **Approval workflow** on billing runs: maker (accounts) → checker (finance), thresholds, auto-approve rules, rejection reasons.
-2. **Scheduled runs:** auto-pull on the 1st, auto-issue after approval, auto-send, auto-remind on a dunning ladder (T-3, T+1, T+7, T+15) per customer.
-3. **Usage anomaly checks** before billing: month-on-month swing, zero usage on an active customer, usage with no terms, unknown enterprise IDs.
-4. **Customer portal / pay links:** invoice view, UPI/NEFT details, dispute button, statement download, payment promise date.
-5. **Credit control:** enforce credit limit, auto-flag/block on overdue beyond N days, expected-collections forecast.
+## Phase 2 — close the order-to-cash loop (DONE)
+1. **Approval workflow** on billing runs: maker → Finance checker (maker can't approve own run unless allowed), auto-approve for clean runs under a limit, mandatory rejection reason, high-severity findings must be acknowledged. Invoices can't be issued or pushed to Zoho until approved.
+2. **Scheduled runs:** auto-creates last month's run from the usage DB, auto-issues + emails on approval, dunning ladder (default T-3, T+1, T+7, T+15) with per-customer opt-out; paused for disputes and customer promises.
+3. **Usage anomaly checks** on every run: month-on-month swing, zero usage on a previously billed customer, usage with no locked terms, unknown enterprise IDs, credit-limit breach.
+4. **Customer portal / pay links:** public per-invoice link — invoice, PDF, bank + UPI details with QR, promise-to-pay date, raise a query.
+5. **Credit control:** exposure vs limit, auto-block/unblock on overdue days, collections forecast from each customer's real payment delay.
 
 ## Phase 3 — Zoho Books parity
 - **Sales:** quotes/estimates, sales orders, recurring invoices, proforma, delivery challans, debit notes, advance receipts & retainers, customer credits applied to invoices, write-offs.

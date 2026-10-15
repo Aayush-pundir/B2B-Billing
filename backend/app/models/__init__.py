@@ -61,6 +61,8 @@ class Client(Base):
     credit_limit = Column(Float, default=0.0)  # 0 = no limit
     account_manager = Column(String, default="")
     segment = Column(String, default="")
+    reminders_enabled = Column(Boolean, default=True)
+    status_reason = Column(String, default="")  # "auto: ..." when blocked by credit control
     notes = Column(Text, default="")
 
     agreements = relationship("Agreement", back_populates="client", cascade="all, delete-orphan")
@@ -154,6 +156,13 @@ class BillingRun(Base):
     summary = Column(JSON, default=dict)
     created_by = Column(String, default="")
     created_at = Column(DateTime, default=now)
+    # approval workflow: draft -> pending_approval -> approved | rejected (-> pushed)
+    submitted_at = Column(DateTime, nullable=True)
+    approved_by = Column(String, default="")
+    approved_at = Column(DateTime, nullable=True)
+    auto_approved = Column(Boolean, default=False)
+    rejection_reason = Column(String, default="")
+    trigger = Column(String, default="manual")  # manual, scheduled
 
     invoices = relationship("Invoice", back_populates="run", cascade="all, delete-orphan")
 
@@ -185,6 +194,12 @@ class Invoice(Base):
     balance_due = Column(Float, default=0.0)
     disputed = Column(Boolean, default=False)
     dispute_reason = Column(String, default="")
+
+    # customer portal / pay link
+    public_token = Column(String, nullable=True, index=True)
+    promise_date = Column(String, nullable=True)  # customer's "I will pay on" date
+    promise_note = Column(String, default="")
+    last_viewed_at = Column(DateTime, nullable=True)
 
     run = relationship("BillingRun", back_populates="invoices")
     client = relationship("Client")

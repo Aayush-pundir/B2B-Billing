@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Agreement, BillingRun, Client, Commercial, CreditNote, Invoice, Payment, User
-from app.services import csv_parser, settings_store, usage_db, zoho
+from app.services import anomalies, csv_parser, invoicing, settings_store, usage_db, zoho
 from app.services.auth import require_user, require_write
 from app.services.engine import compute_invoice
 from app.routers.core_routes import log_action
@@ -41,11 +41,21 @@ def _is_annual_due(client: Client, commercial: Commercial, period: str, confirm_
     return True, ""
 
 
-def _generate_run(db: Session, user: User, period: str, tds_rate: float, confirm_ids: set[str],
-                  usage_by_client: dict, unknown_ids: list[str], source: str) -> dict:
-    """Shared by the database pull and the CSV fallback: turn per-client usage
-    into draft invoices using each client's locked terms."""
+class RunExists(Exception):
+    pass
+
+
+def _generate_run(db: Session, user, period: str, tds_rate: float, confirm_ids: set[str],
+                  usage_by_client: dict, unknown_ids: list[str], source: str,
+                  force: bool = False, trigger: str = "manual") -> dict:
+    """Shared by the database pull, the CSV fallback and the scheduler: turn
+    per-client usage into draft invoices using each client's locked terms, run
+    the anomaly checks, then route the run through the approval policy."""
+    existing = db.query(BillingRun).filter(BillingRun.period == period, BillingRun.status != "rejected").first()
+    if existing and not force:
+        raise RunExists(f"A billing run for {period} already exists (run #{existing.id}, {existing.status}).")
     clients = db.query(Client).all()
+    automation = settings_store.get_automation(db)
 
     settings = settings_store.get_all_settings(db)
     org_state_code = settings["ORG_STATE_CODE"]
@@ -60,6 +70,7 @@ def _generate_run(db: Session, user: User, period: str, tds_rate: float, confirm
 
     invoices_out = []
     skipped = []
+    billed: dict[str, float] = {}
     for client in clients:
         if (client.status or "active") != "active":
             skipped.append({"enterprise_id": client.enterprise_id, "reason": f"customer is {client.status}"})
@@ -96,14 +107,47 @@ def _generate_run(db: Session, user: User, period: str, tds_rate: float, confirm
             commercial.first_invoice_date = f"{period}-06"
 
         invoices_out.append(invoice_no)
+        billed[client.enterprise_id] = result["subtotal"]
 
+    found = anomalies.detect(db, period, clients, usage_by_client, unknown_ids, billed, skipped,
+                             float(automation["ANOMALY_SWING_PCT"] or 50))
+    run_total = round(sum(i.total for i in run.invoices) if run.invoices else 0.0, 2)
     run.summary = {
         "invoices_generated": len(invoices_out), "skipped": skipped, "unknown_enterprise_ids": unknown_ids,
-        "usage_source": source,
+        "usage_source": source, "anomalies": found, "total": run_total,
     }
+    run.trigger = trigger
+    run.submitted_at = datetime.datetime.utcnow()
+
+    # approval policy
+    finalized = None
+    if not settings_store.is_yes(automation["APPROVAL_REQUIRED"]):
+        run.status, run.auto_approved, run.approved_by = "approved", True, "policy: approval not required"
+    else:
+        limit = float(automation["AUTO_APPROVE_MAX_TOTAL"] or 0)
+        if limit > 0 and run_total <= limit and not found and invoices_out:
+            run.status, run.auto_approved, run.approved_by = "approved", True, f"policy: clean run under ₹{limit:,.0f}"
+        else:
+            run.status = "pending_approval"
+    if run.status == "approved":
+        run.approved_at = datetime.datetime.utcnow()
+        if settings_store.is_yes(automation["AUTO_ISSUE_ON_APPROVAL"]):
+            db.flush()
+            finalized = invoicing.finalize_run(db, run)
     db.commit()
-    log_action(db, user, "billing.calculate", "billing_run", f"run={run.id} invoices={len(invoices_out)} source={source}")
-    return {"run_id": run.id, "invoices": invoices_out, "skipped": skipped, "unknown_enterprise_ids": unknown_ids, "usage_source": source}
+    log_action(db, user, "billing.calculate", "billing_run",
+               f"run={run.id} invoices={len(invoices_out)} source={source} status={run.status} anomalies={len(found)}")
+    return {"run_id": run.id, "invoices": invoices_out, "skipped": skipped, "unknown_enterprise_ids": unknown_ids,
+            "usage_source": source, "status": run.status, "anomalies": found, "finalized": finalized}
+
+
+def run_from_database(db: Session, user, period: str, tds_rate: float, confirm_ids: set[str], force: bool = False, trigger: str = "manual") -> dict:
+    """Read the period's usage from the platform database and generate a run. Raises
+    usage_db.UsageDbError / RunExists for the caller to translate."""
+    loading, upi, users = usage_db.fetch_usage(db, period)
+    known_ids = {c.enterprise_id for c in db.query(Client).all()}
+    usage_by_client, unknown_ids = csv_parser.aggregate_usage(loading, upi, users, known_ids)
+    return _generate_run(db, user, period, tds_rate, confirm_ids, usage_by_client, unknown_ids, "database", force=force, trigger=trigger)
 
 
 @router.post("/calculate-db")
@@ -111,18 +155,18 @@ def calculate_billing_from_db(
     period: str = Form(...),
     tds_rate: float = Form(0.0),
     confirm_annual: str = Form(""),
+    force: bool = Form(False),
     db: Session = Depends(get_db),
     user: User = Depends(require_write("billing")),
 ):
     """Primary path: read the period's usage directly from the platform database."""
+    confirm_ids = {x.strip() for x in confirm_annual.split(",") if x.strip()}
     try:
-        loading, upi, users = usage_db.fetch_usage(db, period)
+        return run_from_database(db, user, period, tds_rate, confirm_ids, force)
     except usage_db.UsageDbError as exc:
         raise HTTPException(400, f"Usage database: {exc}")
-    known_ids = {c.enterprise_id for c in db.query(Client).all()}
-    usage_by_client, unknown_ids = csv_parser.aggregate_usage(loading, upi, users, known_ids)
-    confirm_ids = {x.strip() for x in confirm_annual.split(",") if x.strip()}
-    return _generate_run(db, user, period, tds_rate, confirm_ids, usage_by_client, unknown_ids, "database")
+    except RunExists as exc:
+        raise HTTPException(409, str(exc))
 
 
 @router.post("/calculate")
@@ -130,6 +174,7 @@ async def calculate_billing(
     period: str = Form(...),
     tds_rate: float = Form(0.0),
     confirm_annual: str = Form(""),  # comma-separated EnterpriseIds
+    force: bool = Form(False),
     loading_file: UploadFile = File(...),
     upi_file: UploadFile = File(...),
     users_file: UploadFile = File(...),
@@ -143,7 +188,10 @@ async def calculate_billing(
     known_ids = {c.enterprise_id for c in db.query(Client).all()}
     usage_by_client, unknown_ids = csv_parser.aggregate_usage(loading, upi, users, known_ids)
     confirm_ids = {x.strip() for x in confirm_annual.split(",") if x.strip()}
-    return _generate_run(db, user, period, tds_rate, confirm_ids, usage_by_client, unknown_ids, "csv")
+    try:
+        return _generate_run(db, user, period, tds_rate, confirm_ids, usage_by_client, unknown_ids, "csv", force=force)
+    except RunExists as exc:
+        raise HTTPException(409, str(exc))
 
 
 @router.get("/runs")
@@ -152,7 +200,8 @@ def list_runs(db: Session = Depends(get_db), user: User = Depends(require_user))
     return [{
         "id": r.id, "period": r.period, "tds_rate": r.tds_rate, "status": r.status,
         "summary": r.summary, "created_by": r.created_by, "created_at": r.created_at.isoformat(),
-        "invoice_count": len(r.invoices),
+        "invoice_count": len(r.invoices), "trigger": r.trigger, "total": (r.summary or {}).get("total", 0),
+        "anomaly_count": len((r.summary or {}).get("anomalies", [])),
     } for r in rows]
 
 
@@ -171,7 +220,70 @@ def run_detail(run_id: int, db: Session = Depends(get_db), user: User = Depends(
             "total": inv.total, "status": inv.status, "zoho_invoice_id": inv.zoho_invoice_id,
         })
     return {"id": run.id, "period": run.period, "tds_rate": run.tds_rate, "status": run.status,
-            "summary": run.summary, "invoices": invoices}
+            "summary": run.summary, "invoices": invoices, "created_by": run.created_by, "trigger": run.trigger,
+            "approved_by": run.approved_by, "approved_at": run.approved_at.isoformat() if run.approved_at else None,
+            "auto_approved": run.auto_approved, "rejection_reason": run.rejection_reason}
+
+
+class ApproveIn(BaseModel):
+    acknowledge_high: bool = False
+
+
+@router.post("/runs/{run_id}/approve")
+def approve_run(run_id: int, payload: ApproveIn, db: Session = Depends(get_db), user: User = Depends(require_write("approvals"))):
+    run = db.query(BillingRun).get(run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+    if run.status != "pending_approval":
+        raise HTTPException(400, f"Run is {run.status}, not awaiting approval")
+    automation = settings_store.get_automation(db)
+    if run.created_by == user.email and not settings_store.is_yes(automation["APPROVAL_ALLOW_SELF"]):
+        raise HTTPException(403, "Maker-checker: you generated this run, so someone else in Finance must approve it")
+    high = [a for a in (run.summary or {}).get("anomalies", []) if a["severity"] == "high"]
+    if high and not payload.acknowledge_high:
+        raise HTTPException(409, f"{len(high)} high-severity finding(s) must be acknowledged before approving")
+    run.status, run.approved_by, run.approved_at = "approved", user.email, datetime.datetime.utcnow()
+    finalized = None
+    if settings_store.is_yes(automation["AUTO_ISSUE_ON_APPROVAL"]):
+        finalized = invoicing.finalize_run(db, run)
+    db.commit()
+    log_action(db, user, "billing.approve", "billing_run", f"run={run_id} high_ack={bool(high)} finalized={finalized}")
+    return {"ok": True, "status": run.status, "finalized": finalized}
+
+
+class RejectIn(BaseModel):
+    reason: str
+
+
+@router.post("/runs/{run_id}/reject")
+def reject_run(run_id: int, payload: RejectIn, db: Session = Depends(get_db), user: User = Depends(require_write("approvals"))):
+    run = db.query(BillingRun).get(run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+    if run.status != "pending_approval":
+        raise HTTPException(400, f"Run is {run.status}, not awaiting approval")
+    if not payload.reason.strip():
+        raise HTTPException(400, "A rejection reason is required")
+    run.status, run.rejection_reason, run.approved_by, run.approved_at = "rejected", payload.reason.strip(), user.email, datetime.datetime.utcnow()
+    for inv in run.invoices:
+        inv.status = "cancelled"
+        inv.balance_due = 0.0
+    db.commit()
+    log_action(db, user, "billing.reject", "billing_run", f"run={run_id}: {payload.reason}")
+    return {"ok": True}
+
+
+@router.post("/runs/{run_id}/issue-all")
+def issue_all(run_id: int, db: Session = Depends(get_db), user: User = Depends(require_write("billing"))):
+    """Manually issue + send an approved run (used when AUTO_ISSUE_ON_APPROVAL is off)."""
+    run = db.query(BillingRun).get(run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+    if run.status not in ("approved", "pushed"):
+        raise HTTPException(400, "Only an approved run can be issued")
+    result = invoicing.finalize_run(db, run)
+    log_action(db, user, "billing.issue_all", "billing_run", f"run={run_id} {result}")
+    return result
 
 
 @router.post("/runs/{run_id}/push-zoho")
@@ -179,6 +291,8 @@ def push_run_to_zoho(run_id: int, db: Session = Depends(get_db), user: User = De
     run = db.query(BillingRun).get(run_id)
     if not run:
         raise HTTPException(404, "Run not found")
+    if run.status not in ("approved", "pushed"):
+        raise HTTPException(400, "Only an approved run can be pushed to Zoho")
     pushed, failed = [], []
     for inv in run.invoices:
         if inv.status == "pushed":
@@ -217,7 +331,9 @@ def list_invoices(db: Session = Depends(get_db), user: User = Depends(require_us
             "subtotal": inv.subtotal, "gst_type": inv.gst_type, "gst": inv.gst, "tds": inv.tds,
             "total": inv.total, "status": inv.status, "zoho_invoice_id": inv.zoho_invoice_id,
             "due_date": inv.due_date, "paid_amount": inv.paid_amount, "balance_due": inv.balance_due,
-            "disputed": inv.disputed,
+            "disputed": inv.disputed, "promise_date": inv.promise_date, "promise_note": inv.promise_note,
+            "public_token": inv.public_token, "last_viewed_at": inv.last_viewed_at.isoformat() if inv.last_viewed_at else None,
+            "run_status": inv.run.status if inv.run else None,
         })
     return out
 
@@ -240,11 +356,9 @@ def issue_invoice(invoice_id: int, db: Session = Depends(get_db), user: User = D
     inv = _invoice_or_404(db, invoice_id)
     if inv.status != "draft":
         raise HTTPException(400, f"Invoice already {inv.status}")
-    inv.status = "issued"
-    inv.issued_at = datetime.datetime.utcnow()
-    if not inv.due_date:
-        inv.due_date = (datetime.date.today() + datetime.timedelta(days=inv.payment_terms_days or 15)).isoformat()
-    inv.balance_due = inv.total - inv.paid_amount
+    if inv.run is not None and inv.run.status not in ("approved", "pushed"):
+        raise HTTPException(400, f"The billing run is {inv.run.status} — it must be approved before invoices can be issued")
+    invoicing.issue(db, inv)
     db.commit()
     log_action(db, user, "invoice.issue", "invoice", inv.invoice_no)
     return {"ok": True, "status": inv.status, "due_date": inv.due_date}
@@ -264,23 +378,10 @@ def invoice_pdf(invoice_id: int, db: Session = Depends(get_db), user: User = Dep
 
 @router.post("/invoices/{invoice_id}/send")
 def send_invoice(invoice_id: int, db: Session = Depends(get_db), user: User = Depends(require_write("billing"))):
-    from app.services.invoice_pdf import build_invoice_pdf
-    from app.services import mailer
-
     inv = _invoice_or_404(db, invoice_id)
     if inv.status == "draft":
         raise HTTPException(400, "Issue the invoice before sending it")
-    client = db.query(Client).get(inv.client_id)
-    org = settings_store.get_all_settings(db)
-    emailed = False
-    if mailer.is_configured() and client.billing_contact_email:
-        pdf_bytes = build_invoice_pdf(org, client, inv)
-        body = (f"Dear {client.name},\n\nPlease find attached invoice {inv.invoice_no} for {inv.period}, "
-                f"amount due Rs. {inv.total:,.2f}, due on {inv.due_date}.\n\n{org.get('ORG_NAME')}")
-        emailed = mailer.send_email(client.billing_contact_email, f"Invoice {inv.invoice_no} — {org.get('ORG_NAME')}",
-                                     body, pdf_bytes, f"{inv.invoice_no}.pdf")
-    inv.status = "sent"
-    inv.sent_at = datetime.datetime.utcnow()
+    emailed = invoicing.send(db, inv)
     db.commit()
     log_action(db, user, "invoice.send", "invoice", f"{inv.invoice_no} emailed={emailed}")
     return {"ok": True, "emailed": emailed}

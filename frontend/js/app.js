@@ -13,9 +13,11 @@ const PAGES = [
   { id: 'invoices', label: 'Invoices', icon: 'fa-receipt', group: 'Billing', sub: 'Issue, send and track invoices' },
   { id: 'receivables', label: 'Receivables', icon: 'fa-scale-balanced', group: 'Collections', sub: 'Outstanding balances and aging' },
   { id: 'reconciliation', label: 'Reconciliation', icon: 'fa-money-check-dollar', group: 'Collections', sub: 'Match bank payments to invoices' },
+  { id: 'credit', label: 'Credit & forecast', icon: 'fa-gauge-high', group: 'Collections', sub: 'Exposure, credit limits and expected collections' },
   { id: 'crm', label: 'CRM Sync', icon: 'fa-rotate', group: 'Collections', sub: 'Keep client identity in sync with your CRM' },
   { id: 'reports', label: 'Reports', icon: 'fa-chart-column', group: 'Insights', sub: 'Export billing and collections reports' },
   { id: 'metrics', label: 'Metrics & Add-ons', icon: 'fa-layer-group', group: 'Insights', sub: 'Usage metrics and add-on line items' },
+  { id: 'automation', label: 'Automation', icon: 'fa-robot', group: 'Admin', sub: 'Approvals, scheduled runs, reminders and credit rules' },
   { id: 'users', label: 'Users', icon: 'fa-users', group: 'Admin', sub: 'Team members and roles' },
   { id: 'audit', label: 'Audit', icon: 'fa-clipboard-list', group: 'Admin', sub: 'Every change, with who and when' },
   { id: 'settings', label: 'Settings', icon: 'fa-gear', group: 'Admin', sub: 'Organisation, tax and delivery settings' },
@@ -308,7 +310,7 @@ async function renderClients(content) {
     ['Billing preferences', [
       ['billing_frequency', 'Billing frequency', ['monthly', 'annual']], ['currency', 'Currency', ['INR', 'USD', 'EUR', 'AED', 'GBP']],
       ['payment_terms_days', 'Payment terms (days)', null, 'number'], ['credit_limit', 'Credit limit (0 = none)', null, 'number'],
-      ['account_manager', 'Account manager'], ['segment', 'Segment'],
+      ['account_manager', 'Account manager'], ['segment', 'Segment'], ['reminders_enabled', 'Send payment reminders', ['yes', 'no']],
     ]],
   ];
 
@@ -316,7 +318,7 @@ async function renderClients(content) {
     const wrap = document.getElementById('client-form-wrap');
     const c = client || { status: 'active', customer_type: 'business', gst_treatment: 'registered', billing_frequency: 'monthly', currency: 'INR', country: 'India', credit_limit: 0 };
     const field = ([k, label, opts, type]) => `<label>${label}${opts
-      ? `<select data-k="${k}">${opts.map(o => `<option ${String(c[k] ?? opts[0]) === o ? 'selected' : ''}>${o}</option>`).join('')}</select>`
+      ? `<select data-k="${k}">${opts.map(o => `<option ${String(k === 'reminders_enabled' ? (c[k] === false ? 'no' : 'yes') : (c[k] ?? opts[0])) === o ? 'selected' : ''}>${o}</option>`).join('')}</select>`
       : `<input data-k="${k}" type="${type || 'text'}" value="${esc(c[k] ?? '')}" ${client && k === 'enterprise_id' ? 'disabled' : ''} />`}</label>`;
     wrap.innerHTML = `
       <div class="card">
@@ -332,6 +334,7 @@ async function renderClients(content) {
       wrap.querySelectorAll('[data-k]').forEach(el => {
         let v = el.value.trim();
         if (el.type === 'number') v = v === '' ? (el.dataset.k === 'credit_limit' ? 0 : null) : Number(v);
+        if (el.dataset.k === 'reminders_enabled') v = v === 'yes';
         data[el.dataset.k] = v;
       });
       if (client) data.enterprise_id = client.enterprise_id;
@@ -727,8 +730,8 @@ async function renderBilling(content) {
     <div class="card">
       <h3>Past Runs</h3>
       <div class="table-wrap"><table>
-        <thead><tr><th>Period</th><th>Invoices</th><th>TDS %</th><th>Status</th><th></th></tr></thead>
-        <tbody>${runs.map(r => `<tr data-id="${r.id}"><td>${esc(r.period)}</td><td>${r.invoice_count}</td><td>${r.tds_rate}</td><td><span class="badge ${r.status}">${r.status}</span></td><td><button class="ghost view-run">View</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">No runs yet</td></tr>'}</tbody>
+        <thead><tr><th>Period</th><th>Invoices</th><th class="right">Total</th><th>Findings</th><th>Source</th><th>Status</th><th></th></tr></thead>
+        <tbody>${runs.map(r => `<tr data-id="${r.id}"><td>${esc(r.period)}</td><td>${r.invoice_count}</td><td class="right amount">${money(r.total)}</td><td>${r.anomaly_count ? `<span class="badge draft">${r.anomaly_count}</span>` : '<span class="muted">—</span>'}</td><td class="muted">${r.trigger === 'scheduled' ? '<i class="fa-solid fa-clock"></i> scheduled' : esc(r.created_by)}</td><td><span class="badge ${r.status}">${esc(r.status.replace('_', ' '))}</span></td><td><button class="ghost view-run">${r.status === 'pending_approval' ? 'Review' : 'View'}</button></td></tr>`).join('') || '<tr><td colspan="7" class="muted">No runs yet</td></tr>'}</tbody>
       </table></div>
     </div>
     <div id="run-detail"></div>
@@ -737,7 +740,8 @@ async function renderBilling(content) {
   const showRunResult = (res) => {
     document.getElementById('b-result').innerHTML = `
       <div class="card">
-        <h3>Run #${res.run_id} — ${res.invoices.length} invoice(s) generated <span class="badge none">${esc(res.usage_source)}</span></h3>
+        <h3>Run #${res.run_id} — ${res.invoices.length} invoice(s) generated <span class="badge ${res.status}">${esc(res.status.replace('_', ' '))}</span></h3>
+        ${res.status === 'pending_approval' ? `<div class="alert-bar warn"><i class="fa-solid fa-hourglass-half"></i><span>Sent to Finance for approval${res.anomalies.length ? ` — ${res.anomalies.length} finding(s) to review` : ''}.</span></div>` : ''}
         ${res.unknown_enterprise_ids.length ? `<div class="alert-bar warn">Usage found for EnterpriseIds that are not registered customers: ${res.unknown_enterprise_ids.join(', ')}</div>` : ''}
         ${res.skipped.length ? `<h4>Skipped</h4><div class="table-wrap"><table><thead><tr><th>EnterpriseId</th><th>Reason</th></tr></thead><tbody>${res.skipped.map(s => `<tr><td>${esc(s.enterprise_id)}</td><td>${esc(s.reason)}</td></tr>`).join('')}</tbody></table></div>` : ''}
       </div>`;
@@ -751,7 +755,12 @@ async function renderBilling(content) {
     fd.append('tds_rate', document.getElementById('b-tds').value || '0');
     fd.append('confirm_annual', '');
     try { showRunResult(await Apx.calculateBillingDb(fd)); toast('Billing run created from database usage'); }
-    catch (err) { toast(err.message, true); }
+    catch (err) {
+      if (/already exists/.test(err.message) && confirm(err.message + '\n\nCreate another run for this period anyway?')) {
+        fd.append('force', 'true');
+        try { showRunResult(await Apx.calculateBillingDb(fd)); toast('Billing run created'); } catch (e2) { toast(e2.message, true); }
+      } else if (!/already exists/.test(err.message)) toast(err.message, true);
+    }
     btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-database"></i> Calculate from database';
   });
 
@@ -784,13 +793,33 @@ async function renderBilling(content) {
   async function viewRun(id) {
     const run = await Apx.runDetail(id);
     const box = document.getElementById('run-detail');
+    const findings = (run.summary && run.summary.anomalies) || [];
+    const high = findings.filter(a => a.severity === 'high');
+    const pending = run.status === 'pending_approval';
+    const approved = ['approved', 'pushed'].includes(run.status);
+    const hasDraft = run.invoices.some(i => i.status === 'draft');
+    const sev = { high: 'fa-circle-exclamation', medium: 'fa-triangle-exclamation', low: 'fa-circle-info' };
     box.innerHTML = `
       <div class="card">
-        <div class="flex-between"><h3>Run ${run.period} — ${run.invoices.length} invoices</h3>
-          <button class="secondary" id="push-zoho">Push to Zoho Books</button>
+        <div class="flex-between">
+          <h3>Run ${esc(run.period)} — ${run.invoices.length} invoices · ${money((run.summary || {}).total)} <span class="badge ${run.status}">${esc(run.status.replace('_', ' '))}</span></h3>
+          <div class="actions-row" style="margin:0">
+            ${approved && hasDraft ? '<button id="issue-all"><i class="fa-solid fa-paper-plane"></i> Issue &amp; send all</button>' : ''}
+            ${approved ? '<button class="secondary" id="push-zoho">Push to Zoho Books</button>' : ''}
+          </div>
         </div>
+        <p class="muted">${run.trigger === 'scheduled' ? 'Created automatically by the scheduler' : `Generated by ${esc(run.created_by)}`}${run.approved_by ? ` · ${run.status === 'rejected' ? 'rejected' : 'approved'} by ${esc(run.approved_by)}` : ''}</p>
+        ${run.status === 'rejected' ? `<div class="alert-bar danger"><i class="fa-solid fa-ban"></i><span>Rejected: ${esc(run.rejection_reason)}. Its invoices were cancelled.</span></div>` : ''}
+        ${findings.length ? `<h4>Findings to review</h4><div class="findings">${findings.map(a => `<div class="finding ${a.severity}"><i class="fa-solid ${sev[a.severity]}"></i><div><b>${esc(a.enterprise_id)}</b> <span class="badge ${a.severity === 'high' ? 'error' : a.severity === 'medium' ? 'draft' : 'none'}">${a.severity}</span><div>${esc(a.message)}</div></div></div>`).join('')}</div>`
+                : '<div class="finding ok"><i class="fa-solid fa-circle-check"></i><div>No findings — usage is consistent with previous months.</div></div>'}
+        ${pending && isFinance() ? `
+          <div class="approval-bar">
+            ${high.length ? `<label class="inline-check"><input type="checkbox" id="ack-high" /> I have reviewed the ${high.length} high-severity finding(s)</label>` : '<span class="muted">Review the invoices below, then approve to issue them.</span>'}
+            <div class="actions-row" style="margin:0"><button id="approve-run" ${high.length ? 'disabled' : ''}><i class="fa-solid fa-check"></i> Approve run</button><button class="ghost" id="reject-run"><i class="fa-solid fa-xmark"></i> Reject</button></div>
+          </div>` : ''}
+        ${pending && !isFinance() ? '<div class="alert-bar warn"><i class="fa-solid fa-hourglass-half"></i><span>Waiting for Finance to approve this run. Invoices cannot be issued until then.</span></div>' : ''}
         ${run.invoices.map(inv => `
-          <div class="card" style="background:var(--cream)">
+          <div class="card" style="background:var(--surface-2)">
             <div class="flex-between"><strong>${esc(inv.invoice_no)} — ${esc(inv.client_name)} (${esc(inv.enterprise_id)})</strong><span class="badge ${inv.status}">${inv.status}</span></div>
             <div class="table-wrap"><table>
               <thead><tr><th>Line</th><th>Qty</th><th>Detail</th><th class="right">Amount</th></tr></thead>
@@ -799,7 +828,26 @@ async function renderBilling(content) {
             <p class="right">Subtotal: ${money(inv.subtotal)} · ${esc(inv.gst_type)}: ${money(inv.gst)} · TDS: ${money(inv.tds)} · <strong>Total: ${money(inv.total)}</strong></p>
           </div>`).join('') || '<p class="muted">No invoices in this run.</p>'}
       </div>`;
-    box.querySelector('#push-zoho').addEventListener('click', async () => {
+    box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    box.querySelector('#ack-high')?.addEventListener('change', (e) => { box.querySelector('#approve-run').disabled = !e.target.checked; });
+    box.querySelector('#approve-run')?.addEventListener('click', async () => {
+      try {
+        const r = await Apx.approveRun(id, !!box.querySelector('#ack-high')?.checked);
+        toast(r.finalized ? `Approved — ${r.finalized.issued} invoice(s) issued, ${r.finalized.emailed} emailed` : 'Approved');
+        navigate('billing');
+      } catch (e) { toast(e.message, true); }
+    });
+    box.querySelector('#reject-run')?.addEventListener('click', async () => {
+      const reason = prompt('Why are you rejecting this run? (required)');
+      if (!reason) return;
+      try { await Apx.rejectRun(id, reason); toast('Run rejected — invoices cancelled'); navigate('billing'); }
+      catch (e) { toast(e.message, true); }
+    });
+    box.querySelector('#issue-all')?.addEventListener('click', async () => {
+      try { const r = await Apx.issueAll(id); toast(`${r.issued} invoice(s) issued, ${r.emailed} emailed`); viewRun(id); }
+      catch (e) { toast(e.message, true); }
+    });
+    box.querySelector('#push-zoho')?.addEventListener('click', async () => {
       try {
         const res = await Apx.pushZoho(id);
         toast(`Pushed ${res.pushed.length} invoice(s)${res.failed.length ? `, ${res.failed.length} failed` : ''}`);
@@ -817,25 +865,32 @@ async function renderInvoices(content) {
   const invoices = await Apx.listInvoices();
   content.innerHTML = `
     <div class="card"><div class="table-wrap"><table>
-      <thead><tr><th>Invoice No</th><th>Client</th><th>Period</th><th class="right">Total</th><th class="right">Balance Due</th><th>Due</th><th>Status</th><th></th></tr></thead>
+      <thead><tr><th>Invoice No</th><th>Client</th><th>Period</th><th class="right">Total</th><th class="right">Balance Due</th><th>Due</th><th>Customer promise</th><th>Status</th><th></th></tr></thead>
       <tbody>${invoices.map(i => `
         <tr data-id="${i.id}">
           <td>${esc(i.invoice_no)}</td><td>${esc(i.client_name)}</td><td>${esc(i.period)}</td>
           <td class="right amount">${money(i.total)}</td>
           <td class="right amount">${money(i.balance_due)}</td>
           <td>${esc(i.due_date || '—')}</td>
-          <td><span class="badge ${i.status}">${esc(i.status)}</span>${i.disputed ? ' <span class="badge draft">disputed</span>' : ''}</td>
+          <td>${i.promise_date ? `<span class="badge sent" title="${esc(i.promise_note || '')}">pays ${esc(i.promise_date)}</span>` : '<span class="muted">—</span>'}${i.last_viewed_at ? ' <i class="fa-solid fa-eye muted" title="Customer viewed on ' + new Date(i.last_viewed_at).toLocaleString() + '"></i>' : ''}</td>
+          <td><span class="badge ${i.status}">${esc(i.status)}</span>${i.disputed && i.status !== 'disputed' ? ' <span class="badge draft">disputed</span>' : ''}</td>
           <td>
-            ${i.status === 'draft' ? '<button class="ghost inv-issue">Issue</button>' : ''}
+            ${i.status === 'draft' ? `<button class="ghost inv-issue" ${i.run_status && !['approved', 'pushed'].includes(i.run_status) ? 'disabled title="The billing run must be approved first"' : ''}>Issue</button>` : ''}
+            ${i.public_token ? '<button class="ghost inv-link" title="Copy customer portal link"><i class="fa-solid fa-link"></i></button>' : ''}
             ${['issued', 'sent'].includes(i.status) ? '<button class="ghost inv-send">Send</button>' : ''}
             <a class="btn ghost" href="${Apx.invoicePdfUrl(i.id)}" target="_blank">PDF</a>
             ${!i.disputed && i.status !== 'paid' ? '<button class="ghost inv-dispute">Dispute</button>' : ''}
             ${i.disputed ? '<button class="ghost inv-resolve">Resolve</button>' : ''}
           </td>
-        </tr>`).join('') || '<tr><td colspan="8" class="muted">No invoices yet</td></tr>'}</tbody>
+        </tr>`).join('') || '<tr><td colspan="9" class="muted">No invoices yet</td></tr>'}</tbody>
     </table></div></div>
   `;
 
+  content.querySelectorAll('.inv-link').forEach(btn => btn.addEventListener('click', async (e) => {
+    const inv = invoices.find(x => String(x.id) === e.target.closest('tr').dataset.id);
+    const url = `${location.origin}/portal.html?t=${inv.public_token}`;
+    try { await navigator.clipboard.writeText(url); toast('Portal link copied'); } catch (err) { prompt('Copy this link:', url); }
+  }));
   content.querySelectorAll('.inv-issue').forEach(btn => btn.addEventListener('click', async (e) => {
     const id = e.target.closest('tr').dataset.id;
     try { await Apx.issueInvoice(id); toast('Invoice issued'); navigate('invoices'); }
@@ -1132,7 +1187,7 @@ async function renderSettings(content) {
     <div class="card">
       <h3>Organisation Settings</h3>
       <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.6rem;max-width:640px;">
-        ${Object.entries(settings).map(([k, v]) => `<label>${esc(k.replace(/_/g, ' ').toLowerCase().replace(/^./, c => c.toUpperCase()).replace(/\bgst\b/gi, 'GST'))}<input class="s-field" data-key="${k}" value="${esc(v)}" /></label>`).join('')}
+        ${Object.entries(settings).map(([k, v]) => `<label>${esc(k.replace(/_/g, ' ').toLowerCase().replace(/^./, c => c.toUpperCase()).replace(/\b(gst|upi|ifsc|url|id)\b/gi, m => m.toUpperCase()).replace(/\bno\b/i, 'number'))}<input class="s-field" data-key="${k}" value="${esc(v)}" /></label>`).join('')}
       </div>
       <div class="actions-row"><button id="save-settings">Save Settings</button></div>
     </div>
@@ -1181,6 +1236,145 @@ async function renderSettings(content) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Credit control & collections forecast
+// ---------------------------------------------------------------------------
+
+async function renderCredit(content) {
+  const [exp, fc] = await Promise.all([Apx.creditExposure(), Apx.creditForecast()]);
+  const canAct = ['admin', 'accounts', 'finance'].includes(state.user.role);
+  const max = Math.max(1, ...fc.weeks.map(w => w.amount));
+  const fmtWeek = (d) => new Date(d).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  const flagBadge = { over_limit: ['error', 'over limit'], near_limit: ['draft', 'near limit'], overdue: ['draft', 'overdue'] };
+
+  content.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-hand-holding-dollar"></i></div><div class="value">${money(exp.totals.outstanding)}</div><div class="label">Outstanding</div></div>
+      <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-calendar-check"></i></div><div class="value">${money(fc.expected_total)}</div><div class="label">Expected collections (open invoices)</div></div>
+      <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-clock-rotate-left"></i></div><div class="value">${money(exp.totals.overdue)}</div><div class="label">Overdue</div></div>
+      <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-gauge-high"></i></div><div class="value">${exp.totals.over_limit}</div><div class="label">Over credit limit</div></div>
+      <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-ban"></i></div><div class="value">${exp.totals.blocked}</div><div class="label">Blocked customers</div></div>
+    </div>
+
+    <div class="card">
+      <div class="flex-between"><h3>Collections forecast</h3><span class="muted">Based on each customer's actual payment delay · avg ${fc.avg_delay_days} days after due</span></div>
+      <div class="bars">
+        <div class="bar-col"><div class="bar-area"><div class="bar-val">${money(fc.past_expected.amount)}</div><div class="bar warn" style="height:${Math.max(2, fc.past_expected.amount / Math.max(max, fc.past_expected.amount) * 100)}%"></div></div><div class="bar-lbl">Past expected<br><span class="muted">${fc.past_expected.count} inv</span></div></div>
+        ${fc.weeks.map(w => `<div class="bar-col"><div class="bar-area"><div class="bar-val">${w.amount ? money(w.amount) : ''}</div><div class="bar" style="height:${w.amount ? Math.max(2, w.amount / Math.max(max, fc.past_expected.amount) * 100) : 1}%"></div></div><div class="bar-lbl">${fmtWeek(w.start)}<br><span class="muted">${w.count} inv</span></div></div>`).join('')}
+        <div class="bar-col"><div class="bar-area"><div class="bar-val">${fc.later.amount ? money(fc.later.amount) : ''}</div><div class="bar" style="height:${fc.later.amount ? 20 : 1}%"></div></div><div class="bar-lbl">Later<br><span class="muted">${fc.later.count} inv</span></div></div>
+      </div>
+      ${fc.disputed.count ? `<p class="muted"><i class="fa-solid fa-circle-info"></i> ${money(fc.disputed.amount)} across ${fc.disputed.count} disputed invoice(s) is excluded until the query is resolved.</p>` : ''}
+      <p class="muted" style="font-size:.78rem">"Past expected" means the customer's usual payment date has already passed — chase these first. A customer's promised date overrides the estimate.</p>
+    </div>
+
+    <div class="card">
+      <div class="flex-between"><h3>Customer exposure</h3>
+        ${canAct ? '<button class="ghost" id="cc-eval"><i class="fa-solid fa-shield-halved"></i> Apply auto-block rules now</button>' : ''}</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Customer</th><th class="right">Outstanding</th><th class="right">Overdue</th><th>Oldest</th><th>Credit limit</th><th>Flags</th><th>Status</th><th></th></tr></thead>
+        <tbody>${exp.rows.map(r => `<tr data-id="${r.client_id}">
+          <td><b>${esc(r.name)}</b><div class="muted" style="font-size:.74rem">${esc(r.enterprise_id)}</div></td>
+          <td class="right amount">${money(r.outstanding)}</td><td class="right amount">${r.overdue ? money(r.overdue) : '—'}</td>
+          <td>${r.max_days_overdue ? `${r.max_days_overdue} days` : '—'}</td>
+          <td>${r.credit_limit ? `<div class="meter"><span class="${r.utilization_pct > 100 ? 'bad' : r.utilization_pct > 80 ? 'warn' : ''}" style="width:${Math.min(100, r.utilization_pct)}%"></span></div><span class="muted" style="font-size:.74rem">${r.utilization_pct}% of ${money(r.credit_limit)}</span>` : '<span class="muted">no limit</span>'}</td>
+          <td>${r.flags.map(f => `<span class="badge ${flagBadge[f][0]}">${flagBadge[f][1]}</span>`).join(' ') || '—'}</td>
+          <td><span class="badge ${r.status === 'active' ? 'locked' : r.status === 'blocked' ? 'error' : 'none'}">${esc(r.status)}</span>${r.status_reason ? `<div class="muted" style="font-size:.72rem;white-space:normal;max-width:220px">${esc(r.status_reason)}</div>` : ''}</td>
+          <td>${canAct ? (r.status === 'blocked' ? '<button class="ghost cc-unblock">Unblock</button>' : r.status === 'active' ? '<button class="ghost cc-block">Block</button>' : '') : ''}</td>
+        </tr>`).join('') || '<tr><td colspan="8" class="muted">No open receivables.</td></tr>'}</tbody>
+      </table></div>
+      <p class="muted" style="font-size:.78rem">Blocked and inactive customers are skipped in billing runs. Set the auto-block threshold on the <a href="#automation">Automation</a> page.</p>
+    </div>`;
+
+  document.getElementById('cc-eval')?.addEventListener('click', async () => {
+    try {
+      const r = await Apx.creditEvaluate();
+      toast(r.changes.length ? `${r.changes.length} customer(s) updated` : 'No changes — everyone is within the rules');
+      navigate('credit');
+    } catch (e) { toast(e.message, true); }
+  });
+  content.querySelectorAll('.cc-block').forEach(b => b.addEventListener('click', async (e) => {
+    const reason = prompt('Reason for blocking this customer?', '');
+    if (reason === null) return;
+    try { await Apx.setCustomerStatus(e.target.closest('tr').dataset.id, 'blocked', reason); toast('Customer blocked'); navigate('credit'); }
+    catch (err) { toast(err.message, true); }
+  }));
+  content.querySelectorAll('.cc-unblock').forEach(b => b.addEventListener('click', async (e) => {
+    try { await Apx.setCustomerStatus(e.target.closest('tr').dataset.id, 'active', ''); toast('Customer unblocked'); navigate('credit'); }
+    catch (err) { toast(err.message, true); }
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Automation — approvals, scheduled runs, dunning, credit rules
+// ---------------------------------------------------------------------------
+
+async function renderAutomation(content) {
+  const a = await Apx.automation();
+  const p = a.policy;
+  const can = ['admin', 'finance'].includes(state.user.role);
+  const yn = (k) => `<select data-k="${k}" ${can ? '' : 'disabled'}><option ${p[k] === 'yes' ? 'selected' : ''}>yes</option><option ${p[k] === 'no' ? 'selected' : ''}>no</option></select>`;
+  const num = (k, extra = '') => `<input data-k="${k}" type="number" min="0" ${extra} value="${esc(p[k])}" ${can ? '' : 'disabled'} />`;
+  const tick = a.last_tick;
+
+  content.innerHTML = `
+    ${can ? '' : '<div class="alert-bar warn"><i class="fa-solid fa-lock"></i><span>Only Finance or Admin can change these rules.</span></div>'}
+    <div class="grid-2">
+      <div class="card">
+        <h3><i class="fa-solid fa-stamp"></i> Approval workflow</h3>
+        <p class="muted">A billing run must be approved by Finance before any invoice is issued.</p>
+        <label class="row-field"><span>Require approval</span>${yn('APPROVAL_REQUIRED')}</label>
+        <label class="row-field"><span>Maker may approve their own run</span>${yn('APPROVAL_ALLOW_SELF')}</label>
+        <label class="row-field"><span>Auto-approve clean runs up to (₹, 0 = never)</span>${num('AUTO_APPROVE_MAX_TOTAL')}</label>
+        <label class="row-field"><span>Flag invoices that move more than (%)</span>${num('ANOMALY_SWING_PCT')}</label>
+        <label class="row-field"><span>Issue &amp; email all invoices once approved</span>${yn('AUTO_ISSUE_ON_APPROVAL')}</label>
+      </div>
+      <div class="card">
+        <h3><i class="fa-solid fa-calendar-days"></i> Scheduled billing</h3>
+        <p class="muted">Creates last month's run automatically from the usage database, then waits for approval. Checked every ${a.tick_minutes} minutes.</p>
+        <label class="row-field"><span>Run automatically</span>${yn('AUTO_RUN_ENABLED')}</label>
+        <label class="row-field"><span>Start on day of month (1–28)</span>${num('AUTO_RUN_DAY', 'max="28"')}</label>
+      </div>
+      <div class="card">
+        <h3><i class="fa-solid fa-bell"></i> Payment reminders (dunning)</h3>
+        <p class="muted">Days relative to the due date; negative means before. Paused for disputed invoices and while a customer's promised date hasn't passed.</p>
+        <label class="row-field"><span>Send reminders</span>${yn('DUNNING_ENABLED')}</label>
+        <label class="row-field"><span>Ladder (days, comma separated)</span><input data-k="DUNNING_LADDER" value="${esc(p.DUNNING_LADDER)}" ${can ? '' : 'disabled'} /></label>
+      </div>
+      <div class="card">
+        <h3><i class="fa-solid fa-shield-halved"></i> Credit control</h3>
+        <p class="muted">Customers overdue beyond this many days are blocked from new billing, and unblocked automatically when they clear their dues. Manual blocks are never changed.</p>
+        <label class="row-field"><span>Auto-block after overdue days (0 = off)</span>${num('BLOCK_AFTER_OVERDUE_DAYS')}</label>
+      </div>
+    </div>
+    <div class="actions-row">
+      ${can ? '<button id="au-save"><i class="fa-solid fa-floppy-disk"></i> Save rules</button>' : ''}
+      ${can ? '<span class="muted">Run now:</span><button class="ghost" data-run="run">Scheduled billing</button><button class="ghost" data-run="dunning">Reminders</button><button class="ghost" data-run="credit">Credit rules</button>' : ''}
+    </div>
+    <div id="au-result"></div>
+    <div class="card">
+      <h3>Automation activity</h3>
+      ${tick ? `<p class="muted">Last check: ${new Date(tick.at + 'Z').toLocaleString()}</p>` : '<p class="muted">The scheduler has not run yet.</p>'}
+      <div class="table-wrap"><table>
+        <thead><tr><th>When</th><th>Action</th><th>Detail</th></tr></thead>
+        <tbody>${a.recent.map(r => `<tr><td>${new Date(r.ts + 'Z').toLocaleString()}</td><td>${esc(r.action.replace('automation.', ''))}</td><td style="white-space:normal">${esc(r.detail)}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">Nothing automated yet.</td></tr>'}</tbody>
+      </table></div>
+    </div>`;
+
+  document.getElementById('au-save')?.addEventListener('click', async () => {
+    const values = {};
+    content.querySelectorAll('[data-k]').forEach(el => values[el.dataset.k] = el.value.trim());
+    try { await Apx.saveAutomation(values); toast('Automation rules saved'); } catch (e) { toast(e.message, true); }
+  });
+  content.querySelectorAll('[data-run]').forEach(btn => btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      const r = await Apx.runAutomation([btn.dataset.run]);
+      document.getElementById('au-result').innerHTML = `<div class="card"><h4>Result</h4><pre class="mono" style="white-space:pre-wrap;margin:0">${esc(JSON.stringify(r.steps, null, 2))}</pre></div>`;
+    } catch (e) { toast(e.message, true); }
+    btn.disabled = false;
+  }));
+}
+
 const RENDERERS = {
   dashboard: renderDashboard,
   clients: renderClients,
@@ -1190,9 +1384,11 @@ const RENDERERS = {
   invoices: renderInvoices,
   receivables: renderReceivables,
   reconciliation: renderReconciliation,
+  credit: renderCredit,
   crm: renderCrm,
   reports: renderReports,
   metrics: renderMetrics,
+  automation: renderAutomation,
   users: renderUsers,
   audit: renderAudit,
   settings: renderSettings,

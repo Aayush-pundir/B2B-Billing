@@ -100,6 +100,20 @@ const Apx = {
   createZohoContact: (clientId) => request(`/api/billing/zoho/create-contact/${clientId}`, { method: 'POST' }),
   reportExportUrl: (kind) => `${API_BASE}/api/billing/reports/export?kind=${kind}`,
 
+  // approvals
+  approveRun: (id, acknowledgeHigh) => request(`/api/billing/runs/${id}/approve`, { method: 'POST', body: { acknowledge_high: acknowledgeHigh } }),
+  rejectRun: (id, reason) => request(`/api/billing/runs/${id}/reject`, { method: 'POST', body: { reason } }),
+  issueAll: (id) => request(`/api/billing/runs/${id}/issue-all`, { method: 'POST' }),
+
+  // automation + credit control
+  automation: () => request('/api/automation'),
+  saveAutomation: (values) => request('/api/automation', { method: 'PUT', body: { values } }),
+  runAutomation: (steps) => request('/api/automation/run-now', { method: 'POST', body: { steps } }),
+  creditExposure: () => request('/api/credit/exposure'),
+  creditForecast: () => request('/api/credit/forecast'),
+  creditEvaluate: () => request('/api/credit/evaluate', { method: 'POST' }),
+  setCustomerStatus: (id, status, reason) => request(`/api/credit/customers/${id}/status`, { method: 'PUT', body: { status, reason } }),
+
   // invoice lifecycle (receivables)
   issueInvoice: (id) => request(`/api/billing/invoices/${id}/issue`, { method: 'POST' }),
   sendInvoice: (id) => request(`/api/billing/invoices/${id}/send`, { method: 'POST' }),

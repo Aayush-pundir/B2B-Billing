@@ -8,7 +8,7 @@ from app.config import get_settings
 from app.database import Base, engine, SessionLocal
 from app.migrate import ensure_schema
 from app.models import Metric, Addon
-from app.routers import auth_routes, core_routes, agreement_routes, billing_routes, reconciliation_routes, crm_routes, datasource_routes
+from app.routers import auth_routes, core_routes, agreement_routes, billing_routes, reconciliation_routes, crm_routes, datasource_routes, automation_routes, portal_routes
 
 settings = get_settings()
 
@@ -30,6 +30,8 @@ app.include_router(billing_routes.router)
 app.include_router(reconciliation_routes.router)
 app.include_router(crm_routes.router)
 app.include_router(datasource_routes.router)
+app.include_router(automation_routes.router)
+app.include_router(portal_routes.router)
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
 if FRONTEND_DIR.is_dir():
@@ -58,6 +60,16 @@ def seed_data():
         if db.query(Addon).count() == 0:
             for code, name, rate_type in DEFAULT_ADDONS:
                 db.add(Addon(code=code, name=name, default_rate_type=rate_type, active=True))
+        # One-time upgrades for data created before Phase 2
+        from app.models import BillingRun, Invoice
+        from app.services import invoicing
+        for run in db.query(BillingRun).filter(BillingRun.status == "draft").all():
+            run.status, run.approved_by = "approved", "legacy (before approval workflow)"
+        for inv in db.query(Invoice).filter(Invoice.public_token.is_(None), Invoice.status.notin_(["draft", "cancelled"])).all():
+            invoicing.ensure_token(inv)
         db.commit()
     finally:
         db.close()
+    if os.getenv("DISABLE_SCHEDULER") != "1":
+        from app.services import scheduler
+        scheduler.start_background()

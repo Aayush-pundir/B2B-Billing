@@ -1,0 +1,27 @@
+#portal { max-width: 760px; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+.p-head { display: flex; align-items: center; gap: .7rem; margin-bottom: 1.2rem; }
+.p-head .logo-mark { width: 38px; height: 38px; }
+.p-head b { font-family: 'Bricolage Grotesque', sans-serif; font-size: 1.15rem; display: block; line-height: 1.1; }
+.p-head span { font-size: .78rem; color: var(--muted); }
+.p-hero { text-align: center; padding: 1.6rem 1.2rem; }
+.p-hero .amt { font-family: 'Bricolage Grotesque', sans-serif; font-size: 2.6rem; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; margin: .3rem 0; }
+.p-hero .lbl { color: var(--muted); font-size: .85rem; }
+.p-hero .meta { display: flex; gap: .5rem; justify-content: center; flex-wrap: wrap; margin-top: .8rem; }
+.p-state { display: flex; gap: .7rem; align-items: center; padding: .8rem 1rem; border-radius: var(--radius); margin-top: 1rem; font-size: .88rem; text-align: left; }
+.p-state.paid { background: var(--ok-soft); color: var(--ok); } .p-state.query { background: var(--warn-soft); color: var(--warn); } .p-state.promise { background: var(--info-soft); color: var(--info); }
+.p-actions { display: flex; gap: .6rem; flex-wrap: wrap; justify-content: center; margin-top: 1rem; }
+.pay-grid { display: grid; grid-template-columns: 1fr auto; gap: 1.2rem; align-items: start; }
+.kv { display: grid; grid-template-columns: 120px 1fr; gap: .35rem .8rem; font-size: .88rem; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; font-family: 'Geist Mono', monospace; display: flex; gap: .5rem; align-items: center; word-break: break-all; }
+.copy { background: none; border: 0; box-shadow: none; padding: .1rem .35rem; color: var(--primary); cursor: pointer; font-size: .8rem; }
+.copy:hover { background: var(--primary-soft); }
+#qr { padding: .6rem; background: #fff; border-radius: 12px; border: 1px solid var(--border); line-height: 0; }
+.p-form { display: grid; gap: .7rem; }
+.p-form .row { display: flex; gap: .6rem; flex-wrap: wrap; } .p-form .row > * { flex: 1; min-width: 140px; }
+.totals { margin-left: auto; width: min(100%, 300px); font-size: .88rem; }
+.totals div { display: flex; justify-content: space-between; padding: .25rem 0; } .totals .grand { border-top: 1px solid var(--border); margin-top: .3rem; padding-top: .5rem; font-weight: 700; font-size: 1rem; }
+.p-foot { text-align: center; color: var(--muted); font-size: .76rem; margin-top: 1.5rem; }
+.p-error { text-align: center; padding: 3rem 1rem; } .p-error i { font-size: 2rem; color: var(--muted); margin-bottom: .8rem; }
+@media (max-width: 560px) { .pay-grid { grid-template-columns: 1fr; } #qr { justify-self: center; } .kv { grid-template-columns: 100px 1fr; } .p-hero .amt { font-size: 2.1rem; } }
+
+.pay-grid + .p-actions { margin-top: 1.1rem; } .pay-grid ~ p.muted { margin-top: 1rem; }

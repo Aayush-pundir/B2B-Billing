@@ -14,9 +14,9 @@ ROLES = ["admin", "accounts", "finance", "sales", "viewer"]
 # manual entry, import from a reviewed agreement, or bulk Excel upload. Admin
 # manages users and system settings but deliberately cannot change terms.
 ROLE_WRITE_ACCESS = {
-    "admin": {"clients", "agreements", "settings", "users", "metrics", "addons", "datasource"},
-    "accounts": {"clients", "agreements", "billing"},
-    "finance": {"clients", "agreements", "billing", "commercials", "metrics", "addons"},
+    "admin": {"clients", "agreements", "settings", "users", "metrics", "addons", "datasource", "automation"},
+    "accounts": {"clients", "agreements", "billing", "credit"},
+    "finance": {"clients", "agreements", "billing", "commercials", "metrics", "addons", "approvals", "automation", "credit"},
     "sales": set(),
     "viewer": set(),
 }

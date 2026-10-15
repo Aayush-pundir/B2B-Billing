@@ -57,18 +57,20 @@ class ClientIn(BaseModel):
     account_manager: str = ""
     segment: str = ""
     notes: str = ""
+    reminders_enabled: bool = True
 
 
 # Master-data columns, in the order used by the bulk template / export.
 CLIENT_FIELDS = list(ClientIn.model_fields.keys())
 CLIENT_INT_FIELDS = {"payment_terms_days"}
 CLIENT_FLOAT_FIELDS = {"credit_limit"}
+CLIENT_BOOL_FIELDS = {"reminders_enabled"}
 CLIENT_ALIASES = {"EnterpriseId": "enterprise_id", "Name": "name", "GSTIN": "gst", "PAN": "pan", "State": "state", "StateCode": "state_code"}
 
 
 def _client_dict(c: Client, commercial) -> dict:
     d = {f: getattr(c, f) for f in CLIENT_FIELDS}
-    d.update({"id": c.id, "zoho_contact_id": c.zoho_contact_id, "commercial_status": commercial.status if commercial else "none"})
+    d.update({"id": c.id, "zoho_contact_id": c.zoho_contact_id, "status_reason": c.status_reason or "", "commercial_status": commercial.status if commercial else "none"})
     return d
 
 
@@ -85,6 +87,8 @@ def _coerce_client_row(row: dict) -> dict:
                 val = int(float(val))
             elif key in CLIENT_FLOAT_FIELDS:
                 val = float(val)
+            elif key in CLIENT_BOOL_FIELDS:
+                val = val.lower() in ("yes", "true", "1", "y")
         except ValueError:
             raise ValueError(f"{key}: '{val}' is not a number")
         out[key] = val

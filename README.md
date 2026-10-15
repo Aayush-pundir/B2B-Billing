@@ -39,6 +39,12 @@ calculation, reconciliation, and reporting runs locally.
 7. **Statement of account** — a running per-client ledger of every invoice
    issued and payment received, available from the Clients page.
 
+## Approvals, automation and the customer portal
+
+- **Approval:** every billing run lands as *pending approval* with anomaly findings; Finance approves (or rejects with a reason). Nothing is issued before that. Policy is on the **Automation** page.
+- **Automation:** an in-process scheduler (checks every 15 min) creates last month's run, sends dunning reminders and applies credit-block rules. Use **Run now** to trigger any step. If you run several server workers, run the scheduler in only one (`DISABLE_SCHEDULER=1` on the others).
+- **Customer portal:** set `PUBLIC_BASE_URL` (and bank/UPI details) in **Settings**; each issued invoice gets a private link (`/portal.html?t=…`) included in the invoice email and reminders.
+
 ## Quick start
 
 ```
