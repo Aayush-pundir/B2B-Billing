@@ -95,6 +95,16 @@ const Apx = {
   runDetail: (id) => request(`/api/billing/runs/${id}`),
   pushZoho: (id) => request(`/api/billing/runs/${id}/push-zoho`, { method: 'POST' }),
   listInvoices: () => request('/api/billing/invoices'),
+  // server-side filter + paging; resolves to { rows, total }
+  pageInvoices: async (params) => {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null)).toString();
+    const res = await fetch(`${API_BASE}/api/billing/invoices?${qs}`, { credentials: 'include' });
+    if (res.status === 401) return null;
+    if (!res.ok) { let d = res.statusText; try { d = (await res.json()).detail || d; } catch (e) {} throw new Error(d); }
+    return { rows: await res.json(), total: Number(res.headers.get('X-Total-Count') || 0) };
+  },
+  dashboard: () => request('/api/dashboard'),
+  search: (q) => request(`/api/search?q=${encodeURIComponent(q)}`),
   expiryAlerts: () => request('/api/billing/alerts/expiry'),
   annualDueAlerts: (period) => request(`/api/billing/alerts/annual-due?period=${period}`),
   createZohoContact: (clientId) => request(`/api/billing/zoho/create-contact/${clientId}`, { method: 'POST' }),

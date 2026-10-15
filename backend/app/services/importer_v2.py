@@ -331,12 +331,24 @@ def _groups(db: Session, lines: list[dict], by_row: dict[int, BillingAccount]) -
 
 def import_rules(db: Session, text: str, user_email: str, lock: bool = False, replace: bool = False) -> dict:
     lines = [json.loads(l) for l in text.splitlines() if l.strip()]
-    created = skipped = updated = 0
     by_row: dict[int, BillingAccount] = {}
-    unmodelled = 0
+    # one lookup up front instead of a query (and an implicit flush) per rulebook row; ids are resolved
+    # through relationships so each row no longer needs its own flush either
+    existing = {a.source_row: a for a in db.query(BillingAccount).filter(BillingAccount.source_row.isnot(None)).order_by(BillingAccount.id.desc())}
+    with db.no_autoflush:
+        created, skipped, updated, unmodelled = _import_rules_rows(db, lines, existing, by_row, user_email, lock, replace)
+    db.flush()
+    groups = _groups(db, lines, by_row)
+    db.commit()
+    return {"lines": len(lines), "accounts_created": created, "accounts_updated": updated, "skipped_existing": skipped,
+            "unmodelled_components": unmodelled, "groups_created": groups, "contracts_locked": lock}
+
+
+def _import_rules_rows(db, lines, existing, by_row, user_email, lock, replace) -> tuple[int, int, int, int]:
+    created = skipped = updated = unmodelled = 0
     for r in lines:
         row = r.get("row")
-        acct = db.query(BillingAccount).filter(BillingAccount.source_row == row).first()
+        acct = existing.get(row)
         if acct and not replace:
             by_row[row] = acct
             skipped += 1
@@ -346,12 +358,10 @@ def import_rules(db: Session, text: str, user_email: str, lock: bool = False, re
         if acct is None:
             client = Client(enterprise_id=f"ROW-{row}", name=name, billing_frequency="monthly",
                             status="inactive" if status in ("Dropped", "Demo – not billable") else "active")
-            db.add(client)
-            db.flush()
-            acct = BillingAccount(client_id=client.id, display_name=name, source_row=row)
+            acct = BillingAccount(client=client, display_name=name, source_row=row)
             db.add(acct)
-            db.flush()
-            db.add(AccountEnterprise(account_id=acct.id, enterprise_id=f"ROW-{row}", role="primary"))
+            db.add(AccountEnterprise(account=acct, enterprise_id=f"ROW-{row}", role="primary"))
+            existing[row] = acct
             created += 1
         else:
             for c in list(acct.contracts):
@@ -379,17 +389,16 @@ def import_rules(db: Session, text: str, user_email: str, lock: bool = False, re
             pm = re.search(r"×\s*(\d+)/(\d+)\s*days", (r.get("A_platform") or {}).get("rule", ""))
             if pm and int(pm.group(2)) == 30:  # the file is the Sep'26 run (30 days): N active days => live from day 30-N+1
                 acct.go_live_date = f"2026-09-{30 - int(pm.group(1)) + 1:02d}"
-        contract = Contract(account_id=acct.id, version=1, valid_from=acct.go_live_date or "2020-01-01", billing_frequency="monthly",
+        contract = Contract(account=acct, version=1, valid_from=acct.go_live_date or "2020-01-01", billing_frequency="monthly",
                             overall_min_amount=omin, mg_effective_from="2026-10-01" if "MG deferred" in status else None,
                             status="locked" if lock else "draft", source="import", created_by=user_email,
                             approved_by=user_email if lock else "", approved_at=datetime.datetime.utcnow() if lock else None,
                             notes=f"Imported from legacy rulebook row {row}. {' '.join(tags)}".strip())
         db.add(contract)
-        db.flush()
         for i, c in enumerate(comps):
-            db.add(ContractComponent(contract_id=contract.id, component_type=c["component_type"], label=c.get("label", ""), params=c["params"], sort_order=i))
+            db.add(ContractComponent(contract=contract, component_type=c["component_type"], label=c.get("label", ""), params=c["params"], sort_order=i))
         for e in _events(r):
-            db.add(AccountEvent(account_id=acct.id, event_type=e["event_type"], effective_from=e.get("effective_from"), effective_to=e.get("effective_to"),
+            db.add(AccountEvent(account=acct, event_type=e["event_type"], effective_from=e.get("effective_from"), effective_to=e.get("effective_to"),
                                 payload=e.get("payload") or {}, source_text=e.get("source_text", ""), created_by=user_email))
             if e["event_type"] == "no_auto_debit":
                 acct.auto_debit = False
@@ -398,14 +407,12 @@ def import_rules(db: Session, text: str, user_email: str, lock: bool = False, re
             nxt = gl.replace(year=max(gl.year + 1, datetime.date.today().year))
             if nxt < datetime.date.today():
                 nxt = nxt.replace(year=nxt.year + 1)
+            if acct.id is None:
+                db.flush()  # the rule needs the account's id; only escalating accounts reach here
             if not db.query(EscalationRule).filter(EscalationRule.account_id == acct.id).first():
                 db.add(EscalationRule(account_id=acct.id, applies_to="fixed_saas", kind="percent", value=0.10, anniversary_basis="go_live",
                                       next_date=nxt.isoformat(), note="10% yearly escalation (from the legacy sheet)"))
-    db.flush()
-    groups = _groups(db, lines, by_row)
-    db.commit()
-    return {"lines": len(lines), "accounts_created": created, "accounts_updated": updated, "skipped_existing": skipped,
-            "unmodelled_components": unmodelled, "groups_created": groups, "contracts_locked": lock}
+    return created, skipped, updated, unmodelled
 
 
 def _period_dates(text: str) -> tuple[str | None, str | None]:

@@ -438,3 +438,22 @@ h4 { font-family: 'Geist', sans-serif; font-size: .78rem; text-transform: upperc
   #topbar { padding: .75rem 1rem; } #content { padding: 1.1rem 1rem 2.5rem; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+
+/* ---- quick jump ---- */
+.page-host { display: contents; }
+.quick-btn { width: auto; padding: 0 .65rem; gap: .5rem; display: inline-flex; align-items: center; }
+.quick-btn kbd, .palette-foot kbd { font: 600 .68rem/1 var(--font, inherit); padding: .18rem .38rem; border: 1px solid var(--border); border-radius: 5px; color: var(--muted); background: var(--bg, transparent); }
+#palette { position: fixed; inset: 0; z-index: 90; background: rgba(15, 18, 38, .45); display: flex; justify-content: center; align-items: flex-start; padding: 12vh 1rem 0; backdrop-filter: blur(2px); }
+.palette-box { width: min(620px, 100%); background: var(--card, #fff); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 24px 60px rgba(0, 0, 0, .28); overflow: hidden; }
+.palette-box input { width: 100%; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 1rem 1.1rem; font-size: 1rem; background: transparent; outline: none; }
+#palette-list { max-height: 50vh; overflow: auto; padding: .35rem; }
+.palette-item { display: flex; align-items: center; gap: .7rem; padding: .55rem .7rem; border-radius: 8px; cursor: pointer; }
+.palette-item.on, .palette-item:hover { background: var(--primary-soft, rgba(99, 102, 241, .12)); }
+.palette-item i { width: 1.1rem; text-align: center; color: var(--muted); }
+.palette-item .pn { font-weight: 600; }
+.palette-item .ps { color: var(--muted); font-size: .8rem; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-item .pk { font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.palette-empty { padding: 1.2rem; text-align: center; color: var(--muted); }
+.palette-foot { display: flex; gap: .9rem; padding: .5rem .9rem; border-top: 1px solid var(--border); color: var(--muted); font-size: .74rem; }
+@media (max-width: 760px) { .quick-btn kbd { display: none; } }

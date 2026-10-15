@@ -11,7 +11,7 @@ from collections import defaultdict
 from sqlalchemy.orm import Session
 
 from app.models import BillingAccount, BillingException, BillingRun, Client, Invoice, Payment, UsageSnapshot
-from app.services import engine2, renewals
+from app.services import cache, engine2, renewals
 
 GROUP_LABEL = {"A": "Platform / load fee", "B": "UPI fees", "C": "Users & admins", "D": "Modules", "MG": "Minimum top-ups", "CAP": "Cap adjustments"}
 OPEN = ("issued", "sent", "partially_paid", "overdue", "disputed", "pushed")
@@ -45,6 +45,10 @@ def _pct(a: float, b: float) -> float | None:
 
 
 def overview(db: Session, period: str | None = None, months: int = 12) -> dict:
+    return cache.cached(db, "insights", _overview, period, months)
+
+
+def _overview(db: Session, period: str | None = None, months: int = 12) -> dict:
     today = datetime.date.today()
     invoices = db.query(Invoice).filter(Invoice.status.notin_(("draft", "cancelled"))).all()
     clients = {c.id: c for c in db.query(Client).all()}

@@ -150,6 +150,7 @@ function toggleTheme() {
 
 window.addEventListener('hashchange', () => navigate(location.hash.replace('#', '')));
 
+let navSeq = 0;
 async function navigate(page) {
   if (!PAGES.some(p => p.id === page)) page = 'dashboard';
   state.route = page;
@@ -160,20 +161,27 @@ async function navigate(page) {
     <button class="icon-btn menu-btn" id="menu-btn" aria-label="Menu"><i class="fa-solid fa-bars"></i></button>
     <div class="page-title"><h2>${meta.label}</h2><div class="sub">${meta.sub}</div></div>
     <div class="topbar-actions">
+      <button class="icon-btn quick-btn" id="quick-btn" title="Quick jump (Ctrl+K)" aria-label="Quick jump"><i class="fa-solid fa-magnifying-glass"></i><kbd>Ctrl K</kbd></button>
       <button class="icon-btn" id="theme-btn" title="Toggle theme" aria-label="Toggle theme"><i class="fa-solid ${dark ? 'fa-sun' : 'fa-moon'}"></i></button>
       <div class="bell" id="bell"><button class="icon-btn" title="Agreement alerts" aria-label="Alerts"><i class="fa-regular fa-bell"></i></button><span class="count" id="bell-count"></span></div>
     </div>`;
   document.getElementById('theme-btn').addEventListener('click', toggleTheme);
+  document.getElementById('quick-btn').addEventListener('click', openPalette);
   document.getElementById('menu-btn').addEventListener('click', () => document.body.classList.toggle('nav-open'));
   document.getElementById('bell').addEventListener('click', () => { location.hash = 'agreements'; });
-  const content = document.getElementById('content');
+  // Each navigation renders into its own host, so a slow page that finishes after the user has moved on
+  // can only write into a node that is no longer attached — it never overwrites the page now showing.
+  const mine = ++navSeq;
+  const content = document.createElement('div');
+  content.className = 'page-host';
   content.innerHTML = '<div class="skeleton-grid"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div><div class="skeleton block"></div>';
+  document.getElementById('content').replaceChildren(content);
   try {
     await RENDERERS[page](content);
   } catch (e) {
-    content.innerHTML = `<div class="card"><p style="color:var(--danger)">${esc(e.message)}</p></div>`;
+    if (mine === navSeq) content.innerHTML = `<div class="card"><p style="color:var(--danger)">${esc(e.message)}</p></div>`;
   }
-  loadBell();
+  if (mine === navSeq) loadBell();
 }
 
 async function loadBell() {
@@ -190,11 +198,11 @@ async function loadBell() {
 // ---------------------------------------------------------------------------
 
 async function renderDashboard(content) {
-  const [clients, commercials, runs, invoices, alerts] = await Promise.all([
-    Apx.listClients(), Apx.listCommercials(), Apx.listRuns(), Apx.listInvoices(), Apx.expiryAlerts(),
-  ]);
-  const revenue = invoices.reduce((s, i) => s + i.total, 0);
-  const locked = commercials.filter(c => c.status === 'locked').length;
+  const [d, alerts] = await Promise.all([Apx.dashboard(), Apx.expiryAlerts()]);
+  const runs = d.recent_runs;
+  const clients = { length: d.clients }, runsCount = d.runs, invoices = { length: d.invoices };
+  const revenue = d.revenue;
+  const locked = d.locked_commercials;
 
   let alertHtml = '';
   if (alerts.danger.length) alertHtml += `<div class="alert-bar danger"><i class="fa-solid fa-triangle-exclamation"></i> ${alerts.danger.length} agreement(s) expiring within 30 days</div>`;
@@ -205,7 +213,7 @@ async function renderDashboard(content) {
     <div class="stat-grid">
       <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-building"></i></div><div class="value">${clients.length}</div><div class="label">Total Clients</div></div>
       <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-lock"></i></div><div class="value">${locked}</div><div class="label">Locked Commercials</div></div>
-      <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-play"></i></div><div class="value">${runs.length}</div><div class="label">Billing Runs</div></div>
+      <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-play"></i></div><div class="value">${runsCount}</div><div class="label">Billing Runs</div></div>
       <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-receipt"></i></div><div class="value">${invoices.length}</div><div class="label">Invoices</div></div>
       <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-indian-rupee-sign"></i></div><div class="value">${money(revenue)}</div><div class="label">Total Revenue</div></div>
     </div>
@@ -222,7 +230,7 @@ async function renderDashboard(content) {
       <h3>Recent billing runs</h3>
       <div class="table-wrap"><table>
         <thead><tr><th>Period</th><th>Invoices</th><th>Status</th><th>Created</th></tr></thead>
-        <tbody>${runs.slice(0, 8).map(r => `<tr><td>${esc(r.period)}</td><td>${r.invoice_count}</td><td><span class="badge ${r.status}">${r.status}</span></td><td>${new Date(r.created_at).toLocaleString()}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No runs yet</td></tr>'}</tbody>
+        <tbody>${runs.map(r => `<tr><td>${esc(r.period)}</td><td>${r.invoice_count}</td><td><span class="badge ${r.status}">${r.status}</span></td><td>${new Date(r.created_at).toLocaleString()}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No runs yet</td></tr>'}</tbody>
       </table></div>
     </div>
   `;
@@ -368,12 +376,14 @@ async function renderClients(content) {
       else navigate('clients');
     } catch (err) { toast(err.message, true); }
   });
-  document.getElementById('search').addEventListener('input', (e) => {
-    const q = e.target.value.toLowerCase();
+  const searchBox = document.getElementById('search');
+  const applySearch = () => {
+    const q = searchBox.value.toLowerCase();
     drawRows(clients.filter(c => c.name.toLowerCase().includes(q) || c.enterprise_id.toLowerCase().includes(q)));
-  });
-
-  drawRows(clients);
+  };
+  searchBox.addEventListener('input', applySearch);
+  if (state.clientQ) { searchBox.value = state.clientQ; state.clientQ = ''; }
+  applySearch();
 }
 
 // ---------------------------------------------------------------------------
@@ -870,10 +880,39 @@ async function renderBilling(content) {
 // Invoices
 // ---------------------------------------------------------------------------
 
+const INV_PAGE = 50;
+const INV_STATUSES = ['draft', 'issued', 'sent', 'partially_paid', 'paid', 'overdue', 'disputed', 'written_off', 'cancelled'];
+
 async function renderInvoices(content) {
-  const invoices = await Apx.listInvoices();
+  const f = state.inv = Object.assign({ q: '', status: '', period: '', page: 0 }, state.inv || {});
+  if (state.invQ) { f.q = state.invQ; f.page = 0; state.invQ = ''; }
   content.innerHTML = `
-    <div class="card"><div class="table-wrap"><table>
+    <div class="card"><div class="actions-row">
+      <input id="inv-q" placeholder="Search invoice no. or customer…" value="${esc(f.q)}" style="min-width:260px" />
+      <select id="inv-status"><option value="">All statuses</option>${INV_STATUSES.map(s => `<option value="${s}" ${f.status === s ? 'selected' : ''}>${s.replace('_', ' ')}</option>`).join('')}</select>
+      <input type="month" id="inv-period" value="${esc(f.period)}" title="Billing period" />
+      <span class="muted" id="inv-count" style="margin-left:auto"></span>
+      <button class="ghost" id="inv-prev" aria-label="Previous page"><i class="fa-solid fa-chevron-left"></i></button>
+      <button class="ghost" id="inv-next" aria-label="Next page"><i class="fa-solid fa-chevron-right"></i></button>
+    </div>
+    <div class="table-wrap" id="inv-table"></div></div>`;
+  let invoices = [], seq = 0;
+
+  async function load() {
+    const mine = ++seq;
+    const res = await Apx.pageInvoices({ q: f.q, status: f.status, period: f.period, limit: INV_PAGE, offset: f.page * INV_PAGE });
+    if (!res || mine !== seq || !content.isConnected) return;
+    if (f.page > 0 && !res.rows.length) { f.page = 0; return load(); }
+    invoices = res.rows;
+    draw(res.total);
+  }
+
+  function draw(total) {
+    const from = total ? f.page * INV_PAGE + 1 : 0, to = f.page * INV_PAGE + invoices.length;
+    content.querySelector('#inv-count').textContent = total ? `${from}–${to} of ${total}` : '';
+    content.querySelector('#inv-prev').disabled = f.page === 0;
+    content.querySelector('#inv-next').disabled = to >= total;
+    content.querySelector('#inv-table').innerHTML = `<table>
       <thead><tr><th>Invoice No</th><th>Client</th><th>Period</th><th class="right">Total</th><th class="right">Balance Due</th><th>Due</th><th>Customer promise</th><th>Status</th><th></th></tr></thead>
       <tbody>${invoices.map(i => `
         <tr data-id="${i.id}">
@@ -891,10 +930,19 @@ async function renderInvoices(content) {
             ${!i.disputed && i.status !== 'paid' ? '<button class="ghost inv-dispute">Dispute</button>' : ''}
             ${i.disputed ? '<button class="ghost inv-resolve">Resolve</button>' : ''}
           </td>
-        </tr>`).join('') || '<tr><td colspan="9" class="muted">No invoices yet</td></tr>'}</tbody>
-    </table></div></div>
-  `;
+        </tr>`).join('') || '<tr><td colspan="9" class="muted">No invoices match</td></tr>'}</tbody>
+    </table>`;
+    wireRows();
+  }
 
+  let timer;
+  content.querySelector('#inv-q').addEventListener('input', (e) => { clearTimeout(timer); timer = setTimeout(() => { f.q = e.target.value; f.page = 0; load(); }, 250); });
+  content.querySelector('#inv-status').addEventListener('change', (e) => { f.status = e.target.value; f.page = 0; load(); });
+  content.querySelector('#inv-period').addEventListener('change', (e) => { f.period = e.target.value; f.page = 0; load(); });
+  content.querySelector('#inv-prev').addEventListener('click', () => { f.page = Math.max(0, f.page - 1); load(); });
+  content.querySelector('#inv-next').addEventListener('click', () => { f.page += 1; load(); });
+
+  function wireRows() {
   content.querySelectorAll('.inv-link').forEach(btn => btn.addEventListener('click', async (e) => {
     const inv = invoices.find(x => String(x.id) === e.target.closest('tr').dataset.id);
     const url = `${location.origin}/portal.html?t=${inv.public_token}`;
@@ -922,6 +970,9 @@ async function renderInvoices(content) {
     try { await Apx.disputeInvoice(id, false, ''); toast('Dispute resolved'); navigate('invoices'); }
     catch (err) { toast(err.message, true); }
   }));
+  }
+
+  await load();
 }
 
 // ---------------------------------------------------------------------------
@@ -1405,3 +1456,67 @@ const RENDERERS = {
 Object.assign(RENDERERS, MODULE_RENDERERS, V2_RENDERERS, INSIGHT_RENDERERS);
 
 boot();
+
+
+// ---------------------------------------------------------------------------
+// Quick jump (Ctrl/Cmd+K or "/") — pages instantly, records after two characters
+// ---------------------------------------------------------------------------
+
+function openPalette() {
+  if (document.getElementById('palette')) return;
+  const host = document.createElement('div');
+  host.id = 'palette';
+  host.innerHTML = `<div class="palette-box" role="dialog" aria-label="Quick jump">
+    <input id="palette-q" placeholder="Jump to a page, customer, account, invoice or vendor…" autocomplete="off" />
+    <div id="palette-list"></div>
+    <div class="palette-foot"><kbd>↑↓</kbd> move <kbd>Enter</kbd> open <kbd>Esc</kbd> close</div></div>`;
+  document.body.appendChild(host);
+  const input = host.querySelector('#palette-q'), list = host.querySelector('#palette-list');
+  let items = [], idx = 0, seq = 0, timer;
+  const close = () => host.remove();
+
+  const go = (it) => { close(); if (it.before) it.before(); if (location.hash === '#' + it.page) navigate(it.page); else location.hash = it.page; };
+  const draw = () => {
+    list.innerHTML = items.map((it, i) => `<div class="palette-item ${i === idx ? 'on' : ''}" data-i="${i}">
+      <i class="fa-solid ${it.icon}"></i><span class="pn">${esc(it.name)}</span><span class="ps">${esc(it.sub || '')}</span><span class="pk">${esc(it.kind)}</span></div>`).join('')
+      || '<div class="palette-empty">No matches</div>';
+    const on = list.querySelector('.on'); if (on) on.scrollIntoView({ block: 'nearest' });
+  };
+  const pageItems = (q) => PAGES.filter(p => !q || (p.label + ' ' + p.group).toLowerCase().includes(q)).slice(0, 8)
+    .map(p => ({ name: p.label, sub: p.group, icon: p.icon, kind: 'Page', page: p.id }));
+
+  async function refresh() {
+    const q = input.value.trim().toLowerCase(), mine = ++seq;
+    items = pageItems(q); idx = 0; draw();
+    if (q.length < 2) return;
+    try {
+      const r = await Apx.search(input.value.trim());
+      if (!r || mine !== seq) return;
+      const rec = [
+        ...r.customers.map(x => ({ name: x.name, sub: x.sub, icon: 'fa-building', kind: 'Customer', page: 'clients', before: () => { state.clientQ = x.name; } })),
+        ...r.accounts.map(x => ({ name: x.name, sub: x.sub, icon: 'fa-building-user', kind: 'Billing account', page: 'accounts', before: () => { state.v2Q = x.name; } })),
+        ...r.invoices.map(x => ({ name: x.name, sub: x.sub, icon: 'fa-receipt', kind: 'Invoice', page: 'invoices', before: () => { state.invQ = x.name; } })),
+        ...r.vendors.map(x => ({ name: x.name, sub: x.sub, icon: 'fa-truck', kind: 'Vendor', page: 'purchases' })),
+      ];
+      items = [...rec, ...items].slice(0, 14); idx = 0; draw();
+    } catch (e) { /* search is a convenience; the page list still works */ }
+  }
+
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(refresh, 160); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') close();
+    else if (e.key === 'ArrowDown') { e.preventDefault(); idx = Math.min(idx + 1, items.length - 1); draw(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); idx = Math.max(idx - 1, 0); draw(); }
+    else if (e.key === 'Enter' && items[idx]) go(items[idx]);
+  });
+  list.addEventListener('click', (e) => { const row = e.target.closest('.palette-item'); if (row) go(items[Number(row.dataset.i)]); });
+  host.addEventListener('mousedown', (e) => { if (e.target === host) close(); });
+  refresh(); input.focus();
+}
+
+document.addEventListener('keydown', (e) => {
+  if (!state.user) return;
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '') || document.activeElement?.isContentEditable;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openPalette(); }
+  else if (e.key === '/' && !typing) { e.preventDefault(); openPalette(); }
+});

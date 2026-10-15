@@ -45,6 +45,13 @@ calculation, reconciliation, and reporting runs locally.
 - **Automation:** an in-process scheduler (checks every 15 min) creates last month's run, sends dunning reminders and applies credit-block rules. Use **Run now** to trigger any step. If you run several server workers, run the scheduler in only one (`DISABLE_SCHEDULER=1` on the others).
 - **Customer portal:** set `PUBLIC_BASE_URL` (and bank/UPI details) in **Settings**; each issued invoice gets a private link (`/portal.html?t=…`) included in the invoice email and reminders.
 
+## Speed and navigation
+
+- **Quick jump:** press `Ctrl/⌘ + K` (or `/`) anywhere to jump to a page, customer, billing account, invoice or vendor.
+- **Invoices** filter by search / status / period and page 50 at a time on the server (`X-Total-Count` carries the total), so the list stays instant with tens of thousands of invoices.
+- **Dashboard** is one small call (`/api/dashboard`) instead of downloading every client, run and invoice.
+- **Reports** share one cached build of the derived ledger between writes (any commit invalidates it, a 5 s TTL bounds staleness across workers), and list endpoints no longer issue a query per row. A billing run over the ~800-account rulebook computes in about half a second. None of this changes a billing rule — the regression against the legacy sheet is identical.
+
 ## Quick start
 
 ```

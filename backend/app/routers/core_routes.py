@@ -111,12 +111,10 @@ def read_table(raw: bytes, filename: str) -> list[dict]:
 
 @router.get("/clients")
 def list_clients(db: Session = Depends(get_db), user: User = Depends(require_user)):
-    clients = db.query(Client).order_by(Client.name).all()
-    out = []
-    for c in clients:
-        commercial = db.query(Commercial).filter(Commercial.client_id == c.id).order_by(Commercial.id.desc()).first()
-        out.append(_client_dict(c, commercial))
-    return out
+    latest: dict[int, Commercial] = {}
+    for com in db.query(Commercial).order_by(Commercial.id).all():  # ascending, so the last write per client is the newest
+        latest[com.client_id] = com
+    return [_client_dict(c, latest.get(c.id)) for c in db.query(Client).order_by(Client.name).all()]
 
 
 @router.post("/clients")

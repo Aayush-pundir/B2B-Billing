@@ -6,7 +6,7 @@ import calendar
 import datetime
 from decimal import Decimal as D
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models import (AccountEvent, BillingAccount, BillingGroup, BillingGroupMember, Client, Contract,
                         SubscriptionInvoice)
@@ -74,10 +74,19 @@ def lifecycle(account: BillingAccount, period: str) -> dict:
 
 # ------------------------------- subscriptions -------------------------------
 
-def covering_subscriptions(db: Session, account_id: int, period: str) -> list[SubscriptionInvoice]:
+def raised_subscriptions(db: Session) -> dict[int, list[SubscriptionInvoice]]:
+    """Every raised subscription invoice grouped by account — one query for a whole run instead of one per account."""
+    out: dict[int, list[SubscriptionInvoice]] = {}
+    for s in db.query(SubscriptionInvoice).filter(SubscriptionInvoice.status == "raised", SubscriptionInvoice.account_id.isnot(None)).order_by(SubscriptionInvoice.id).all():
+        out.setdefault(s.account_id, []).append(s)
+    return out
+
+
+def covering_subscriptions(db: Session, account_id: int, period: str, prefetched: dict | None = None) -> list[SubscriptionInvoice]:
     start, end, _ = period_bounds(period)
     out = []
-    for s in db.query(SubscriptionInvoice).filter(SubscriptionInvoice.account_id == account_id, SubscriptionInvoice.status == "raised").all():
+    rows = prefetched.get(account_id, []) if prefetched is not None else db.query(SubscriptionInvoice).filter(SubscriptionInvoice.account_id == account_id, SubscriptionInvoice.status == "raised").all()
+    for s in rows:
         a, b = _d(s.period_start), _d(s.period_end)
         if a and b and a <= start and b >= end:
             out.append(s)
@@ -129,7 +138,7 @@ def usage_for(account: BillingAccount, period: str, snaps: dict[str, dict]) -> t
     return usage, sorted(manual), seen
 
 
-def compute_account(db: Session, account: BillingAccount, period: str, snaps: dict[str, dict], *, ignore_overall_min: bool = False) -> dict | None:
+def compute_account(db: Session, account: BillingAccount, period: str, snaps: dict[str, dict], *, ignore_overall_min: bool = False, subs_by_account: dict | None = None) -> dict | None:
     """Returns None when the account has no locked v2 contract (caller falls back to v1 rules)."""
     contract = active_contract(account, period)
     if contract is None:
@@ -146,7 +155,7 @@ def compute_account(db: Session, account: BillingAccount, period: str, snaps: di
         if (a and a > end) or (b and b < start):
             continue
         comps.append({"component_type": c.component_type, "label": c.label, "params": c.params or {}, "sort_order": c.sort_order})
-    subs = covering_subscriptions(db, account.id, period)
+    subs = covering_subscriptions(db, account.id, period, subs_by_account)
     covers = set(contract.subscription_covers or ["A"]) if subs else set()
     mg_from = _d(contract.mg_effective_from) or life["mg_from"]
     ctx = {"period_start": start, "days_in_month": days, "active_days": life["active_days"], "active_fraction": life["fraction"],
@@ -281,14 +290,17 @@ def validate_account(db: Session, r: dict, period: str) -> list[dict]:
     return out
 
 
-def subscription_checks(db: Session, period: str, accounts: list[BillingAccount]) -> list[dict]:
+def subscription_checks(db: Session, period: str, accounts: list[BillingAccount], subs_by_account: dict | None = None) -> list[dict]:
     start, end, _ = period_bounds(period)
     out: list[dict] = []
     nxt = (end + datetime.timedelta(days=1))
     next_end = datetime.date(nxt.year, nxt.month, calendar.monthrange(nxt.year, nxt.month)[1])
     freq_months = {"annual": 12, "quarterly": 3, "half_yearly": 6}
     for a in accounts:
-        subs = db.query(SubscriptionInvoice).filter(SubscriptionInvoice.account_id == a.id, SubscriptionInvoice.status == "raised").order_by(SubscriptionInvoice.period_start).all()
+        if subs_by_account is not None:
+            subs = sorted(subs_by_account.get(a.id, []), key=lambda x: (x.period_start or "", x.id))
+        else:
+            subs = db.query(SubscriptionInvoice).filter(SubscriptionInvoice.account_id == a.id, SubscriptionInvoice.status == "raised").order_by(SubscriptionInvoice.period_start).all()
         life = lifecycle(a, period)
         periodic = any(e.event_type in ("annual_billing", "quarterly_billing") for e in a.events)
         if periodic and not subs and life["billable"]:
@@ -320,14 +332,17 @@ def subscription_checks(db: Session, period: str, accounts: list[BillingAccount]
 
 def compute_run(db: Session, period: str, snaps: dict[str, dict], clients_by_id: dict[int, Client]) -> dict:
     """Compute every v2 account. Returns {client_id: result} plus run-level exceptions."""
-    accounts = db.query(BillingAccount).all()
+    accounts = db.query(BillingAccount).options(
+        selectinload(BillingAccount.enterprises), selectinload(BillingAccount.events),
+        selectinload(BillingAccount.contracts).selectinload(Contract.components)).all()
+    subs_by_account = raised_subscriptions(db)
     membership = group_membership(db)
     results: dict[int, dict] = {}
     by_account: dict[int, dict] = {}
     for a in accounts:
         g = membership.get(a.id)
         ignore = bool(g and g.kind in ("equal_split", "per_entity_min", "pooled") and g.group_min_amount is not None)
-        r = compute_account(db, a, period, snaps, ignore_overall_min=ignore)
+        r = compute_account(db, a, period, snaps, ignore_overall_min=ignore, subs_by_account=subs_by_account)
         if r is not None:
             by_account[a.id] = r
     apply_groups(db, by_account)
@@ -337,7 +352,7 @@ def compute_run(db: Session, period: str, snaps: dict[str, dict], clients_by_id:
         r["blocked"] = any(e["blocks"] for e in r["exceptions"])
         r["billable"] = r["life"]["billable"]
         results[r["account"].client_id] = r
-    run_ex += subscription_checks(db, period, accounts)
+    run_ex += subscription_checks(db, period, accounts, subs_by_account)
     # systemic: a usage column the feed doesn't supply while many accounts need it
     for field in ("maker_count", "admin_count"):
         needing = [r for r in by_account.values() if any(f"input_missing:{field}" in l.get("flags", []) for l in r["lines"])]

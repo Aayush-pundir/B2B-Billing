@@ -31,7 +31,8 @@ INDEXES = [
     ("contracts", ["account_id"]), ("contract_components", ["contract_id"]), ("account_events", ["account_id"]),
     ("account_enterprises", ["account_id"]), ("subscription_invoices", ["account_id"]), ("billing_exceptions", ["run_id"]),
     ("billing_exceptions", ["account_id"]), ("bills", ["vendor_id"]), ("bill_payments", ["bill_id"]), ("journal_lines", ["entry_id"]),
-    ("reminders_log", ["invoice_id"]), ("clients", ["status"]),
+    ("reminders_log", ["invoice_id"]), ("clients", ["status"]), ("clients", ["name"]), ("invoices", ["invoice_no"]),
+    ("commercials", ["client_id"]), ("usage_snapshots", ["period", "enterprise_id"]), ("credit_notes", ["invoice_id"]), ("payments", ["date"]),
 ]
 
 

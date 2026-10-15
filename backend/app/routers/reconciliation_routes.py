@@ -127,10 +127,10 @@ def aging_report(db: Session = Depends(get_db), user: User = Depends(require_use
     today = datetime.date.today()
     invoices = db.query(Invoice).filter(Invoice.status.in_(["issued", "sent", "partially_paid", "overdue"])).all()
     buckets = {"current": [], "0_30": [], "31_60": [], "61_90": [], "90_plus": []}
+    names = dict(db.query(Client.id, Client.name).all())
     for inv in invoices:
-        client = db.query(Client).get(inv.client_id)
         row = {
-            "invoice_no": inv.invoice_no, "client_name": client.name if client else "?",
+            "invoice_no": inv.invoice_no, "client_name": names.get(inv.client_id, "?"),
             "due_date": inv.due_date, "balance_due": inv.balance_due, "disputed": inv.disputed,
         }
         if not inv.due_date:

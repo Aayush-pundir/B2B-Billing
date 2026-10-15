@@ -2,13 +2,13 @@ import datetime
 import io
 import json
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from pydantic import BaseModel
-from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy import func, or_
+from sqlalchemy.orm import Session, defer
 
 from app.database import get_db
 from app.models import Agreement, BillingAccount, BillingException, BillingRun, Client, Commercial, CreditNote, Invoice, Payment, User
@@ -255,11 +255,12 @@ async def calculate_billing(
 
 @router.get("/runs")
 def list_runs(db: Session = Depends(get_db), user: User = Depends(require_user)):
+    counts = dict(db.query(Invoice.run_id, func.count(Invoice.id)).group_by(Invoice.run_id).all())
     rows = db.query(BillingRun).order_by(BillingRun.id.desc()).all()
     return [{
         "id": r.id, "period": r.period, "tds_rate": r.tds_rate, "status": r.status,
         "summary": r.summary, "created_by": r.created_by, "created_at": r.created_at.isoformat(),
-        "invoice_count": len(r.invoices), "trigger": r.trigger, "total": (r.summary or {}).get("total", 0),
+        "invoice_count": counts.get(r.id, 0), "trigger": r.trigger, "total": (r.summary or {}).get("total", 0),
         "anomaly_count": len((r.summary or {}).get("anomalies", [])),
     } for r in rows]
 
@@ -391,22 +392,40 @@ def push_run_to_zoho(run_id: int, db: Session = Depends(get_db), user: User = De
 
 
 @router.get("/invoices")
-def list_invoices(db: Session = Depends(get_db), user: User = Depends(require_user)):
-    rows = db.query(Invoice).order_by(Invoice.id.desc()).all()
-    out = []
-    for inv in rows:
-        client = db.query(Client).get(inv.client_id)
-        out.append({
-            "id": inv.id, "invoice_no": inv.invoice_no, "period": inv.period,
-            "client_name": client.name if client else "?", "enterprise_id": client.enterprise_id if client else "?",
-            "subtotal": inv.subtotal, "gst_type": inv.gst_type, "gst": inv.gst, "tds": inv.tds,
-            "total": inv.total, "status": inv.status, "zoho_invoice_id": inv.zoho_invoice_id,
-            "due_date": inv.due_date, "paid_amount": inv.paid_amount, "balance_due": inv.balance_due,
-            "disputed": inv.disputed, "promise_date": inv.promise_date, "promise_note": inv.promise_note,
-            "public_token": inv.public_token, "last_viewed_at": inv.last_viewed_at.isoformat() if inv.last_viewed_at else None,
-            "run_status": inv.run.status if inv.run else None,
-        })
-    return out
+def list_invoices(
+    response: Response,
+    status: str | None = None,
+    period: str | None = None,
+    q: str | None = None,
+    limit: int | None = Query(None, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_user),
+):
+    """All invoices (newest first). Optional filters and limit/offset let big books page instead of
+    shipping everything; X-Total-Count reports the size of the filtered set."""
+    query = db.query(Invoice, Client.name, Client.enterprise_id, BillingRun.status).outerjoin(Client, Client.id == Invoice.client_id).outerjoin(BillingRun, BillingRun.id == Invoice.run_id).options(defer(Invoice.lines))
+    if status:
+        query = query.filter(Invoice.status == status)
+    if period:
+        query = query.filter(Invoice.period == period)
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        query = query.filter(or_(Invoice.invoice_no.ilike(like), Client.name.ilike(like), Client.enterprise_id.ilike(like)))
+    response.headers["X-Total-Count"] = str(query.count())
+    query = query.order_by(Invoice.id.desc())
+    if limit:
+        query = query.offset(offset).limit(limit)
+    return [{
+        "id": inv.id, "invoice_no": inv.invoice_no, "period": inv.period,
+        "client_name": name or "?", "enterprise_id": ent or "?",
+        "subtotal": inv.subtotal, "gst_type": inv.gst_type, "gst": inv.gst, "tds": inv.tds,
+        "total": inv.total, "status": inv.status, "zoho_invoice_id": inv.zoho_invoice_id,
+        "due_date": inv.due_date, "paid_amount": inv.paid_amount, "balance_due": inv.balance_due,
+        "disputed": inv.disputed, "promise_date": inv.promise_date, "promise_note": inv.promise_note,
+        "public_token": inv.public_token, "last_viewed_at": inv.last_viewed_at.isoformat() if inv.last_viewed_at else None,
+        "run_status": run_status,
+    } for inv, name, ent, run_status in query.all()]
 
 
 # --------------------------------------------------------------------------

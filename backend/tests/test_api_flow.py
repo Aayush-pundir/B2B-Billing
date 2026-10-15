@@ -244,3 +244,46 @@ def test_slab_contract_import_whole_amount(fin):
     assert sim(900000) == 18000.0           # slab 1: 2%
     assert sim(2000000) == 35000.0          # slab 2 applies to ALL of it (whole-amount): 1.75%
     assert sim(6000000) == 60000.0          # top slab: 1%
+
+
+def test_reports_never_serve_stale_books_after_a_write(fin):
+    """The ledger is cached between writes; a new document must show in the reports on the very next request."""
+    today = __import__("datetime").date.today().isoformat()
+    before = fin.get(f"/api/finance/reports/trial-balance?as_of={today}").json()["total_debit"]
+    fin.get(f"/api/finance/reports/trial-balance?as_of={today}")            # warm the cache
+    cid = fin.get("/api/clients").json()[0]["id"]
+    it = fin.post("/api/items", json={"code": "CACHE1", "name": "Cache probe", "hsn_sac": "999293", "rate": 1000, "gst_rate": 18}).json()["id"]
+    fin.post("/api/sales/invoices", json={"client_id": cid, "lines": [{"item_id": it, "qty": 1}], "issue": True})
+    after = fin.get(f"/api/finance/reports/trial-balance?as_of={today}").json()["total_debit"]
+    assert round(after - before, 2) == 1180.0
+    assert fin.get("/api/finance/integrity").json()["ok"]
+
+
+def test_dashboard_matches_the_underlying_lists(fin):
+    d = fin.get("/api/dashboard").json()
+    invoices, runs, clients = fin.get("/api/billing/invoices").json(), fin.get("/api/billing/runs").json(), fin.get("/api/clients").json()
+    assert d["invoices"] == len(invoices) and d["runs"] == len(runs) and d["clients"] == len(clients)
+    assert round(d["revenue"], 2) == round(sum(i["total"] for i in invoices), 2)
+    assert [r["id"] for r in d["recent_runs"]] == [r["id"] for r in runs][:8]
+    assert [r["invoice_count"] for r in d["recent_runs"]] == [r["invoice_count"] for r in runs][:8]
+
+
+def test_invoice_filters_and_paging(fin):
+    everything = fin.get("/api/billing/invoices")
+    total = len(everything.json())
+    assert total >= 6 and everything.headers["x-total-count"] == str(total)
+    page = fin.get("/api/billing/invoices?limit=3&offset=2")
+    assert [i["id"] for i in page.json()] == [i["id"] for i in everything.json()][2:5] and page.headers["x-total-count"] == str(total)
+    one = everything.json()[0]
+    hit = fin.get(f"/api/billing/invoices?q={one['invoice_no']}").json()
+    assert [i["id"] for i in hit] == [one["id"]]
+    by_status = fin.get(f"/api/billing/invoices?status={one['status']}")
+    assert all(i["status"] == one["status"] for i in by_status.json())
+
+
+def test_quick_search_spans_records_and_ignores_noise(fin):
+    assert fin.get("/api/search?q=a").json() == {"customers": [], "accounts": [], "invoices": [], "vendors": []}
+    name = fin.get("/api/clients").json()[0]["name"]
+    r = fin.get(f"/api/search?q={name[:4]}").json()
+    assert any(c["name"] == name for c in r["customers"])
+    assert fin.get("/api/search?q=zzzzzz-nothing").json()["customers"] == []

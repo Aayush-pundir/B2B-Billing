@@ -16,6 +16,7 @@ import datetime
 
 from sqlalchemy.orm import Session
 
+from app.services import cache
 from app.models import Account, Bill, BillPayment, Client, CreditNote, Invoice, Item, JournalEntry, Payment, Vendor
 
 BANK, AR, TDS_REC, AP, UNALLOC, SUSPENSE, TDS_PAY = "1100", "1200", "1250", "2100", "2250", "2260", "2400"
@@ -50,7 +51,7 @@ def _row(date, account, debit, credit, ref, desc, source, party=""):
             "ref": ref, "desc": desc, "source": source, "party": party}
 
 
-def entries(db: Session) -> list[dict]:
+def _build_entries(db: Session) -> list[dict]:
     rows: list[dict] = []
     clients = {c.id: c.name for c in db.query(Client).all()}
     items = {i.id: i for i in db.query(Item).all()}
@@ -158,6 +159,12 @@ def entries(db: Session) -> list[dict]:
     rows = [r for r in rows if r["date"]]
     rows.sort(key=lambda r: (r["date"], r["ref"]))
     return rows
+
+
+def entries(db: Session) -> list[dict]:
+    """The ledger is derived from every document; rebuilding it per report dominates once there are
+    thousands of invoices. Reports only read it, so one build is shared until the data changes."""
+    return cache.cached(db, "ledger", _build_entries)
 
 
 def account_map(db: Session) -> dict[str, Account]:

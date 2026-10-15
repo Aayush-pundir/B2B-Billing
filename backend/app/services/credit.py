@@ -21,8 +21,11 @@ def _d(value: str | None) -> datetime.date | None:
 def exposure(db: Session, today: datetime.date | None = None) -> list[dict]:
     today = today or datetime.date.today()
     rows = []
+    open_by_client: dict[int, list[Invoice]] = {}
+    for i in db.query(Invoice).filter(Invoice.status.in_(OPEN)).all():
+        open_by_client.setdefault(i.client_id, []).append(i)
     for c in db.query(Client).order_by(Client.name).all():
-        invs = db.query(Invoice).filter(Invoice.client_id == c.id, Invoice.status.in_(OPEN)).all()
+        invs = open_by_client.get(c.id, [])
         outstanding = sum(i.balance_due or 0 for i in invs)
         overdue_amt, max_days, worst = 0.0, 0, ""
         for i in invs:
@@ -71,11 +74,12 @@ def evaluate(db: Session, block_after_days: int, today: datetime.date | None = N
 def _delay_by_client(db: Session) -> tuple[dict[int, float], float]:
     """Average days a customer pays after the due date (from matched payments); plus the org-wide average."""
     per: dict[int, list[int]] = {}
+    invoice_info = {i_id: (client_id, due) for i_id, client_id, due in db.query(Invoice.id, Invoice.client_id, Invoice.due_date).all()}
     for p in db.query(Payment).filter(Payment.invoice_id.isnot(None)).all():
-        inv = db.query(Invoice).get(p.invoice_id)
-        pd, due = _d(p.date), _d(inv.due_date) if inv else None
-        if pd and due and inv:
-            per.setdefault(inv.client_id, []).append(max(-5, min(90, (pd - due).days)))
+        info = invoice_info.get(p.invoice_id)
+        pd, due = _d(p.date), _d(info[1]) if info else None
+        if pd and due and info:
+            per.setdefault(info[0], []).append(max(-5, min(90, (pd - due).days)))
     allv = [v for vs in per.values() for v in vs]
     org = sum(allv) / len(allv) if allv else 0.0
     return {k: sum(v[-6:]) / len(v[-6:]) for k, v in per.items()}, org
