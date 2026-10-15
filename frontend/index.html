@@ -3,14 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>B2B Billing Automation Platform</title>
+  <title>BillingOS — B2B Billing Automation</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>
+  <script>try{var t=localStorage.getItem("theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=t}catch(e){}</script>
   <div id="login-screen"></div>
+  <div class="scrim" onclick="document.body.classList.remove('nav-open')"></div>
+  <div id="toasts" aria-live="polite"></div>
   <div id="app" style="display:none;">
     <aside id="sidebar"></aside>
     <div id="main">

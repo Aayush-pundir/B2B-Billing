@@ -5,28 +5,30 @@
 const state = { user: null, route: 'dashboard' };
 
 const PAGES = [
-  { id: 'dashboard', label: 'Dashboard', icon: 'fa-gauge' },
-  { id: 'clients', label: 'Clients', icon: 'fa-building' },
-  { id: 'agreements', label: 'Agreements', icon: 'fa-file-lines' },
-  { id: 'commercials', label: 'Commercials', icon: 'fa-sliders' },
-  { id: 'billing', label: 'Billing', icon: 'fa-file-invoice-dollar' },
-  { id: 'invoices', label: 'Invoices', icon: 'fa-receipt' },
-  { id: 'receivables', label: 'Receivables', icon: 'fa-scale-balanced' },
-  { id: 'reconciliation', label: 'Reconciliation', icon: 'fa-money-check-dollar' },
-  { id: 'crm', label: 'CRM Sync', icon: 'fa-rotate' },
-  { id: 'reports', label: 'Reports', icon: 'fa-chart-column' },
-  { id: 'metrics', label: 'Metrics & Add-ons', icon: 'fa-layer-group' },
-  { id: 'users', label: 'Users', icon: 'fa-users' },
-  { id: 'audit', label: 'Audit', icon: 'fa-clipboard-list' },
-  { id: 'settings', label: 'Settings', icon: 'fa-gear' },
+  { id: 'dashboard', label: 'Dashboard', icon: 'fa-gauge', group: 'Overview', sub: 'Your billing pipeline at a glance' },
+  { id: 'clients', label: 'Clients', icon: 'fa-building', group: 'Setup', sub: 'Manage client accounts and tax details' },
+  { id: 'agreements', label: 'Agreements', icon: 'fa-file-lines', group: 'Setup', sub: 'Upload contracts and extract commercial terms' },
+  { id: 'commercials', label: 'Commercials', icon: 'fa-sliders', group: 'Setup', sub: 'Review, edit and lock billing rules' },
+  { id: 'billing', label: 'Billing', icon: 'fa-file-invoice-dollar', group: 'Billing', sub: 'Run the monthly billing cycle from usage CSVs' },
+  { id: 'invoices', label: 'Invoices', icon: 'fa-receipt', group: 'Billing', sub: 'Issue, send and track invoices' },
+  { id: 'receivables', label: 'Receivables', icon: 'fa-scale-balanced', group: 'Collections', sub: 'Outstanding balances and aging' },
+  { id: 'reconciliation', label: 'Reconciliation', icon: 'fa-money-check-dollar', group: 'Collections', sub: 'Match bank payments to invoices' },
+  { id: 'crm', label: 'CRM Sync', icon: 'fa-rotate', group: 'Collections', sub: 'Keep client identity in sync with your CRM' },
+  { id: 'reports', label: 'Reports', icon: 'fa-chart-column', group: 'Insights', sub: 'Export billing and collections reports' },
+  { id: 'metrics', label: 'Metrics & Add-ons', icon: 'fa-layer-group', group: 'Insights', sub: 'Usage metrics and add-on line items' },
+  { id: 'users', label: 'Users', icon: 'fa-users', group: 'Admin', sub: 'Team members and roles' },
+  { id: 'audit', label: 'Audit', icon: 'fa-clipboard-list', group: 'Admin', sub: 'Every change, with who and when' },
+  { id: 'settings', label: 'Settings', icon: 'fa-gear', group: 'Admin', sub: 'Organisation, tax and delivery settings' },
 ];
 
 function toast(msg, isError = false) {
+  const host = document.getElementById('toasts');
   const t = document.createElement('div');
   t.className = 'toast' + (isError ? ' error' : '');
-  t.textContent = msg;
-  document.body.appendChild(t);
-  setTimeout(() => t.remove(), 3500);
+  t.innerHTML = `<i class="fa-solid ${isError ? 'fa-circle-exclamation' : 'fa-circle-check'}"></i><span></span>`;
+  t.querySelector('span').textContent = msg;
+  host.appendChild(t);
+  setTimeout(() => t.remove(), 3800);
 }
 
 function esc(s) { return (s ?? '').toString().replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -53,12 +55,28 @@ function showLogin() {
   const roles = ['admin', 'accounts', 'finance', 'sales', 'viewer'];
   let selectedRole = 'accounts';
   el.innerHTML = `
-    <div class="login-card">
-      <h1>B2B Billing Automation</h1>
-      <p>Sign in to continue</p>
-      <div class="role-pills">${roles.map(r => `<div class="pill ${r === selectedRole ? 'active' : ''}" data-role="${r}">${r}</div>`).join('')}</div>
-      <input type="email" id="login-email" placeholder="you@company.com" style="width:100%;margin-bottom:0.8rem;" value="admin@example.local" />
-      <button id="login-btn" style="width:100%;justify-content:center;">Sign in (dev)</button>
+    <div class="login-wrap">
+      <section class="login-hero">
+        <div class="brand-lg"><span class="logo-mark"><i class="fa-solid fa-coins"></i></span> BillingOS</div>
+        <div>
+          <h2>From agreement to cash, on autopilot.</h2>
+          <p>Extract commercial terms, run slab billing, issue GST-ready invoices and reconcile bank payments — all in one place.</p>
+          <div class="hero-steps"><span>Agreements</span><span>Billing</span><span>Invoices</span><span>Reconciliation</span><span>Aging</span></div>
+        </div>
+        <div class="hero-foot">Offline-first · No external AI costs · Human-in-the-loop approvals</div>
+      </section>
+      <section class="login-side">
+        <div class="login-card">
+          <h1>Welcome back</h1>
+          <p>Sign in to your billing workspace.</p>
+          <label>Role</label>
+          <div class="role-pills">${roles.map(r => `<div class="pill ${r === selectedRole ? 'active' : ''}" data-role="${r}">${r}</div>`).join('')}</div>
+          <label for="login-email">Email</label>
+          <input type="email" id="login-email" placeholder="you@company.com" value="admin@example.local" />
+          <button id="login-btn" class="btn-lg">Sign in <i class="fa-solid fa-arrow-right"></i></button>
+          <div class="login-note">Dev sign-in — SSO is available once OAuth is configured.</div>
+        </div>
+      </section>
     </div>`;
   el.querySelectorAll('.pill').forEach(p => p.addEventListener('click', () => {
     selectedRole = p.dataset.role;
@@ -86,16 +104,35 @@ function showApp() {
 
 function renderSidebar() {
   const sb = document.getElementById('sidebar');
+  let lastGroup = '';
+  const links = PAGES.map(p => {
+    const head = p.group !== lastGroup ? `<div class="nav-group">${p.group}</div>` : '';
+    lastGroup = p.group;
+    return `${head}<a href="#${p.id}" data-page="${p.id}"><i class="fa-solid ${p.icon}"></i> ${p.label}</a>`;
+  }).join('');
   sb.innerHTML = `
-    <div class="brand"><i class="fa-solid fa-coins"></i> BillingOS</div>
-    <nav>${PAGES.map(p => `<a href="#${p.id}" data-page="${p.id}"><i class="fa-solid ${p.icon}"></i> ${p.label}</a>`).join('')}</nav>
-    <div class="user-box">${esc(state.user.email)}<br/><span style="text-transform:capitalize">${esc(state.user.role)}</span><br/><a href="#" id="logout-link" style="color:var(--orange)">Sign out</a></div>
-  `;
-  sb.querySelector('#logout-link').addEventListener('click', async (e) => {
-    e.preventDefault();
+    <div class="brand"><span class="logo-mark"><i class="fa-solid fa-coins"></i></span> BillingOS</div>
+    <nav>${links}</nav>
+    <div class="user-box">
+      <div class="avatar">${esc(state.user.email.charAt(0))}</div>
+      <div class="user-meta"><div class="email">${esc(state.user.email)}</div><div class="role">${esc(state.user.role)}</div></div>
+      <button class="icon-btn" id="logout-link" title="Sign out" aria-label="Sign out"><i class="fa-solid fa-arrow-right-from-bracket"></i></button>
+    </div>`;
+  sb.querySelector('#logout-link').addEventListener('click', async () => {
     await Apx.logout();
     location.reload();
   });
+  sb.querySelectorAll('nav a').forEach(a => a.addEventListener('click', () => document.body.classList.remove('nav-open')));
+}
+
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem('theme', t); } catch (e) { /* ignore */ }
+}
+function toggleTheme() {
+  applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+  const i = document.querySelector('#theme-btn i');
+  if (i) i.className = 'fa-solid ' + (document.documentElement.dataset.theme === 'dark' ? 'fa-sun' : 'fa-moon');
 }
 
 window.addEventListener('hashchange', () => navigate(location.hash.replace('#', '')));
@@ -104,9 +141,20 @@ async function navigate(page) {
   if (!PAGES.some(p => p.id === page)) page = 'dashboard';
   state.route = page;
   document.querySelectorAll('#sidebar nav a').forEach(a => a.classList.toggle('active', a.dataset.page === page));
-  document.getElementById('topbar').innerHTML = `<h2>${PAGES.find(p => p.id === page).label}</h2><div class="bell" id="bell"><i class="fa-regular fa-bell"></i><span class="count" id="bell-count" style="display:none"></span></div>`;
+  const meta = PAGES.find(p => p.id === page);
+  const dark = document.documentElement.dataset.theme === 'dark';
+  document.getElementById('topbar').innerHTML = `
+    <button class="icon-btn menu-btn" id="menu-btn" aria-label="Menu"><i class="fa-solid fa-bars"></i></button>
+    <div class="page-title"><h2>${meta.label}</h2><div class="sub">${meta.sub}</div></div>
+    <div class="topbar-actions">
+      <button class="icon-btn" id="theme-btn" title="Toggle theme" aria-label="Toggle theme"><i class="fa-solid ${dark ? 'fa-sun' : 'fa-moon'}"></i></button>
+      <div class="bell" id="bell"><button class="icon-btn" title="Agreement alerts" aria-label="Alerts"><i class="fa-regular fa-bell"></i></button><span class="count" id="bell-count"></span></div>
+    </div>`;
+  document.getElementById('theme-btn').addEventListener('click', toggleTheme);
+  document.getElementById('menu-btn').addEventListener('click', () => document.body.classList.toggle('nav-open'));
+  document.getElementById('bell').addEventListener('click', () => { location.hash = 'agreements'; });
   const content = document.getElementById('content');
-  content.innerHTML = '<p class="muted">Loading…</p>';
+  content.innerHTML = '<div class="skeleton-grid"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div><div class="skeleton block"></div>';
   try {
     await RENDERERS[page](content);
   } catch (e) {
@@ -120,7 +168,7 @@ async function loadBell() {
     const alerts = await Apx.expiryAlerts();
     const count = (alerts.danger || []).length + (alerts.warn || []).length;
     const badge = document.getElementById('bell-count');
-    if (badge && count > 0) { badge.style.display = 'inline'; badge.textContent = count; }
+    if (badge && count > 0) { badge.style.display = 'grid'; badge.textContent = count; }
   } catch (e) { /* ignore */ }
 }
 
@@ -142,23 +190,23 @@ async function renderDashboard(content) {
   content.innerHTML = `
     ${alertHtml}
     <div class="stat-grid">
-      <div class="stat-card"><div class="value">${clients.length}</div><div class="label">Total Clients</div></div>
-      <div class="stat-card"><div class="value">${locked}</div><div class="label">Locked Commercials</div></div>
-      <div class="stat-card"><div class="value">${runs.length}</div><div class="label">Billing Runs</div></div>
-      <div class="stat-card"><div class="value">${invoices.length}</div><div class="label">Invoices</div></div>
-      <div class="stat-card"><div class="value">${money(revenue)}</div><div class="label">Total Revenue</div></div>
+      <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-building"></i></div><div class="value">${clients.length}</div><div class="label">Total Clients</div></div>
+      <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-lock"></i></div><div class="value">${locked}</div><div class="label">Locked Commercials</div></div>
+      <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-play"></i></div><div class="value">${runs.length}</div><div class="label">Billing Runs</div></div>
+      <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-receipt"></i></div><div class="value">${invoices.length}</div><div class="label">Invoices</div></div>
+      <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-indian-rupee-sign"></i></div><div class="value">${money(revenue)}</div><div class="label">Total Revenue</div></div>
     </div>
     <div class="card">
-      <h3>Quick Actions</h3>
-      <div class="actions-row">
-        <a class="btn" href="#clients"><i class="fa-solid fa-plus"></i> Add Client</a>
-        <a class="btn secondary" href="#agreements"><i class="fa-solid fa-upload"></i> Upload Agreement</a>
-        <a class="btn ghost" href="#billing"><i class="fa-solid fa-play"></i> Run Monthly Billing</a>
-        <a class="btn ghost" href="#reports"><i class="fa-solid fa-download"></i> Export Reports</a>
+      <h3>Quick actions</h3>
+      <div class="quick-grid">
+        <a class="quick-tile" href="#clients"><span class="qi"><i class="fa-solid fa-plus"></i></span><div><b>Add client</b><span>Create or import accounts</span></div></a>
+        <a class="quick-tile" href="#agreements"><span class="qi"><i class="fa-solid fa-upload"></i></span><div><b>Upload agreement</b><span>Auto-extract terms</span></div></a>
+        <a class="quick-tile" href="#billing"><span class="qi"><i class="fa-solid fa-play"></i></span><div><b>Run monthly billing</b><span>Upload usage CSVs</span></div></a>
+        <a class="quick-tile" href="#reports"><span class="qi"><i class="fa-solid fa-download"></i></span><div><b>Export reports</b><span>Billing &amp; collections</span></div></a>
       </div>
     </div>
     <div class="card">
-      <h3>Recent Billing Runs</h3>
+      <h3>Recent billing runs</h3>
       <div class="table-wrap"><table>
         <thead><tr><th>Period</th><th>Invoices</th><th>Status</th><th>Created</th></tr></thead>
         <tbody>${runs.slice(0, 8).map(r => `<tr><td>${esc(r.period)}</td><td>${r.invoice_count}</td><td><span class="badge ${r.status}">${r.status}</span></td><td>${new Date(r.created_at).toLocaleString()}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No runs yet</td></tr>'}</tbody>
@@ -531,9 +579,9 @@ async function renderBilling(content) {
       <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.6rem;max-width:640px;">
         <label>Period<input type="month" id="b-period" value="${defaultPeriod}" /></label>
         <label>TDS Rate %<input type="number" id="b-tds" value="0" step="0.1" /></label>
-        <label>Loading CSV <a href="${Apx.templateUrl('loading')}">template</a><input type="file" id="b-loading" accept=".csv" /></label>
-        <label>UPI CSV <a href="${Apx.templateUrl('upi')}">template</a><input type="file" id="b-upi" accept=".csv" /></label>
-        <label>Users CSV <a href="${Apx.templateUrl('users')}">template</a><input type="file" id="b-users" accept=".csv" /></label>
+        <label><span>Loading CSV <a href="${Apx.templateUrl('loading')}">template</a></span><input type="file" id="b-loading" accept=".csv" /></label>
+        <label><span>UPI CSV <a href="${Apx.templateUrl('upi')}">template</a></span><input type="file" id="b-upi" accept=".csv" /></label>
+        <label><span>Users CSV <a href="${Apx.templateUrl('users')}">template</a></span><input type="file" id="b-users" accept=".csv" /></label>
       </div>
       <div class="actions-row"><button id="b-run">Calculate Invoices</button></div>
     </div>
@@ -928,7 +976,7 @@ async function renderSettings(content) {
     <div class="card">
       <h3>Organisation Settings</h3>
       <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.6rem;max-width:640px;">
-        ${Object.entries(settings).map(([k, v]) => `<label>${k}<input class="s-field" data-key="${k}" value="${esc(v)}" /></label>`).join('')}
+        ${Object.entries(settings).map(([k, v]) => `<label>${esc(k.replace(/_/g, ' ').toLowerCase().replace(/^./, c => c.toUpperCase()).replace(/\bgst\b/gi, 'GST'))}<input class="s-field" data-key="${k}" value="${esc(v)}" /></label>`).join('')}
       </div>
       <div class="actions-row"><button id="save-settings">Save Settings</button></div>
     </div>
