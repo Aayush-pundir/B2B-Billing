@@ -193,3 +193,54 @@ def test_adhoc_invoice_flows_into_books_and_gst(fin):
 def test_scheduler_tick_is_safe_to_run(fin):
     r = fin.post("/api/automation/run-now", json={"steps": ["recurring", "renewals", "dunning", "credit"]})
     assert r.status_code == 200 and "renewals" in r.json()["steps"]
+
+
+# ----------------------------------------------------------------------------- optional usage inputs: spend-based + fleet
+def test_spend_based_and_fleet_inputs_from_usage_db(fin, adm, monkeypatch, tmp_path):
+    import sqlite3
+    from app.config import get_settings
+    from app.services import usage_db
+
+    db = tmp_path / "usage.db"
+    c = sqlite3.connect(db)
+    c.executescript("""
+      CREATE TABLE wallet_transactions(enterprise_id TEXT, total_transaction_amount REAL, transaction_category TEXT, status TEXT, transaction_date TEXT);
+      CREATE TABLE upi_transactions(enterprise_id TEXT, total_trxn_amount REAL, transaction_category TEXT, transaction_type TEXT, status TEXT, transaction_date TEXT);
+      CREATE TABLE enterprise_users(enterprise_id TEXT, role TEXT, status TEXT);
+      CREATE TABLE spend_txns(enterprise_id TEXT, amount REAL, txn_time TEXT);
+      CREATE TABLE fleet(enterprise_id TEXT, trucks INTEGER);""")
+    c.executemany("INSERT INTO spend_txns VALUES(?,?,?)", [("ENT-T-8", a, f"2026-08-0{i}") for i, a in enumerate([100, 200, 300, 400], start=1)])  # first 2 free -> 700 after
+    c.execute("INSERT INTO fleet VALUES('ENT-T-9', 120)")
+    c.commit(); c.close()
+    monkeypatch.setattr(get_settings(), "USAGE_DATABASE_URL", f"sqlite:///{db}")
+    monkeypatch.setattr(usage_db, "_engine", None)
+
+    rows = [
+        {"row": 8, "customer": "Spend Based Co", "status": "Active", "go_live": "2024-01-01", "A_platform": {"type": "None"}, "C_users": {"type": "None"}, "D_module": {"rule": "x"},
+         "B_upi": {"type": "Special", "free_txn": 2, "rule": "Spend-based: first R transactions free; thereafter 1% of SPEND (card + UPI + RuPay)."}},
+        {"row": 9, "customer": "Fleet Co", "status": "Active", "go_live": "2024-01-01", "B_upi": {"type": "None"}, "C_users": {"type": "None"}, "D_module": {"rule": "x"},
+         "A_platform": {"type": "Fixed (hard-typed)", "rule": "₹3,000 fixed up to 100 trucks; ₹80/truck beyond 100 (excess not formula-coded)."}},
+    ]
+    assert fin.post("/api/v2/import/rules?lock=true", files=files(file="\n".join(json.dumps(r, ensure_ascii=False) for r in rows))).json()["accounts_created"] == 2
+    assert fin.post("/api/v2/import/mapping", files=files(file="source_row,customer,enterprise_id\n8,x,ENT-T-8\n9,x,ENT-T-9\n")).json()["mapped"] == 2
+    assert adm.put("/api/datasource", json={"queries": {"spend": "SELECT enterprise_id, amount, txn_time FROM spend_txns WHERE txn_time >= :period_start AND txn_time < :period_end",
+                                                         "extras": "SELECT enterprise_id, trucks AS truck_count FROM fleet"}}).status_code == 200
+    assert fin.post("/api/v2/usage/2026-08/refresh").status_code == 200
+    snap = {u["enterprise_id"]: u for u in fin.get("/api/v2/usage/2026-08").json()}
+    assert snap["ENT-T-8"]["upi_spend_after_free"] == 700.0 and snap["ENT-T-9"]["truck_count"] == 120
+    sim = lambda name: fin.post(f"/api/v2/accounts/{[a for a in fin.get('/api/v2/accounts').json() if a['name'] == name][0]['id']}/simulate", json={"period": "2026-08"}).json()
+    assert sim("Spend Based Co")["subtotal"] == 7.0                       # 1% × ₹700 after the 2 free transactions
+    assert sim("Fleet Co")["subtotal"] == 3000 + 20 * 80                  # 120 trucks: 20 beyond the 100 included
+    adm.put("/api/datasource", json={"queries": {"spend": "", "extras": ""}})
+
+
+def test_slab_contract_import_whole_amount(fin):
+    row = {"row": 10, "customer": "Slab Co", "status": "Active", "go_live": "2024-01-01", "B_upi": {"type": "None"}, "C_users": {"type": "None"}, "D_module": {"rule": "x"},
+           "A_platform": {"type": "Load % (GTV)", "rate_M": "2% upto 10 lakh, 1.75% 11 lakh to 25 lakh , 1.5% 26 lakh to 50 Lakh, 1% 51 lakh & above"}, "contract_text": "x"}
+    assert fin.post("/api/v2/import/rules?lock=true", files=files(file=json.dumps(row, ensure_ascii=False))).json()["unmodelled_components"] == 0
+    fin.post("/api/v2/import/mapping", files=files(file="source_row,customer,enterprise_id\n10,x,ENT-T-10\n"))
+    aid = [a for a in fin.get("/api/v2/accounts").json() if a["name"] == "Slab Co"][0]["id"]
+    sim = lambda L: fin.post(f"/api/v2/accounts/{aid}/simulate", json={"period": "2026-08", "usage": {"add_money": L}}).json()["subtotal"]
+    assert sim(900000) == 18000.0           # slab 1: 2%
+    assert sim(2000000) == 35000.0          # slab 2 applies to ALL of it (whole-amount): 1.75%
+    assert sim(6000000) == 60000.0          # top slab: 1%

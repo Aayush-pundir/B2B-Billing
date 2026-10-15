@@ -35,3 +35,21 @@ BILLING_RULES_JSONL=/secure/customer_rules_sep26.jsonl BILLING_REGISTER_CSV=/sec
   python backend/tests/regression_real_data.py [--verbose] [--rows=72,264]
 ```
 The data stays outside the repo (gitignored). `pytest backend/tests` runs the spec's golden cases (anonymised).
+
+
+## Usage inputs (Settings → Usage data source)
+| Query | Returns | Needed for |
+|---|---|---|
+| loading | `enterprise_id, amount` | % of Add Money charges |
+| upi | `enterprise_id, txn_count, txn_amount, cnt_le_2500, amt_gt_2500` | per-txn, slab and amount-split UPI |
+| users | `enterprise_id, admin_users, maker_users, checker_users, approver_users, total_users` | per-user / per-admin (makers only are billed) |
+| extras (optional) | `enterprise_id, truck_count, driver_count, card_share_pct` | fleet pricing, conditional UPI |
+| spend (optional) | one row per transaction: `enterprise_id, amount, txn_time` | "first N transactions free, then 1% of spend" — N comes from each contract |
+
+A column the query does not return is "not supplied" (flagged), never silently 0.
+
+## Importer: slab and fleet wording it understands
+Whole-amount slab contracts in either order (`0–10L 2%; 10–15L 1.8%; >15L 1.5%` and `2% upto 10 lakh, 1.75% 11 lakh to 25 lakh …`, with
+`or 8K` style minimums), base-plus-per-truck/driver pricing, load fee + truck excess, GST-inclusive fixed fees, fixed fee less UPI credit,
+pro-rata first month, ₹X incl. BBPS fee. Slabs import as **whole-amount** (flagged `TIER_MODE_ASSUMED`) — switch to marginal on the contract
+if the agreement says band-wise. Anything else becomes "needs modelling" and withholds that invoice.

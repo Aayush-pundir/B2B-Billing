@@ -252,6 +252,9 @@ def validate_account(db: Session, r: dict, period: str) -> list[dict]:
         _ex(out, "NEGATIVE_COMPONENT", "medium", f"{name}: a component computed below zero and was floored at ₹0 (free allowance exceeds usage or credit exceeds base).")
     if r["manual"]:
         _ex(out, "MANUAL_INPUT", "medium", f"{name}: usage typed by hand for {', '.join(r['manual'])} (no system snapshot).")
+    if any(c["component_type"] == "load_percent_tiered" and (c.get("params") or {}).get("mode", "whole") == "whole" for c in r["components"]) and (acct.import_flags is not None) and any(
+            c.source == "import" for c in [r["contract"]]):
+        _ex(out, "TIER_MODE_ASSUMED", "info", f"{name}: slab contract applied as whole-amount (the slab reached applies to all of Add Money). Switch to marginal on the contract if the agreement says band-wise.")
     if "approximation" in flags:
         _ex(out, "APPROXIMATE_CALC", "medium", f"{name}: UPI conditional fee is approximated from monthly totals — verify against per-transaction data.")
     if "cap_applied" in flags:

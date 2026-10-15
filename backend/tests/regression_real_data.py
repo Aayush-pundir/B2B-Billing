@@ -73,7 +73,10 @@ def main():
         covered = any("covered_by_subscription" in l.get("flags", []) for l in res["lines"])
         why = [e["code"] for e in res["exceptions"] if e["severity"] in ("high", "medium") and e["code"] != "ACCOUNT_NOT_MAPPED"][:2] or ["unexplained"]
         status = by_row[row].get("status")
-        if legacy_na and res["billable"]:
+        tiered = any(l["component_type"] == "load_percent_tiered" for l in res["lines"])
+        if tiered and res["billable"] and not legacy_na:
+            why = ["slab contract applied (legacy sheet used a single rate / bespoke formula)"]
+        elif legacy_na and res["billable"]:
             why = ["legacy #N/A lookup (v2 bills its commitment)"]
         elif covered:
             why = ["covered by subscription (legacy bills monthly)"]
@@ -94,7 +97,7 @@ def main():
                 print(f"   - {l['label'][:34]:<34} {float(l['amount']):>11,.2f}  {l['detail'][:90]}")
             print("   overall_min:", res["contract"].overall_min_amount, " mg_from:", res["contract"].mg_effective_from, " subs:", len(res["subs"]), " events:", [e.event_type for e in res["account"].events])
     print(f"\nPeriod {PERIOD}: {exact}/{tot} lines match the legacy sheet ({exact / tot:.1%}); {blocked} withheld by a blocking exception")
-    EXPLAINED = ("legacy #N/A", "covered by subscription", "non-billable", "UNMODELLED_COMPONENT", "INPUT_MISSING", "PENDING_CHECK")
+    EXPLAINED = ("slab contract applied", "legacy #N/A", "covered by subscription", "non-billable", "UNMODELLED_COMPONENT", "INPUT_MISSING", "PENDING_CHECK")
     explained = sum(v for k, v in causes.items() if any(e in " ".join(k) for e in EXPLAINED))
     print("\nMismatches by cause:")
     for k, v in causes.most_common(15):

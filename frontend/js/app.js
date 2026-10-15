@@ -693,7 +693,7 @@ function renderManualTab(content, commercials, clients) {
 // Billing — monthly run
 // ---------------------------------------------------------------------------
 
-const DS_LABEL = { loading: 'Loading', upi: 'UPI transactions', users: 'Users' };
+const DS_LABEL = { loading: 'Loading', upi: 'UPI transactions', users: 'Users', extras: 'Extras (fleet)', spend: 'Spend (per transaction)' };
 function renderDatasourceTest(results) {
   return `<div class="ds-test">${Object.entries(results).map(([name, r]) => r.ok
     ? `<div class="ds-row ok"><b>${esc(DS_LABEL[name] || name)}</b><span class="badge locked">${r.rows} row(s) · ${r.seconds}s</span>
@@ -1204,7 +1204,7 @@ async function renderSettings(content) {
       <div class="flex-between"><h3>Usage data source</h3>
         ${ds.configured ? `<span class="badge locked">${esc(ds.dialect)} · ${esc(ds.host)}</span>` : '<span class="badge draft">not configured</span>'}</div>
       <p class="muted">Monthly billing reads usage from this database. The connection string lives in the server environment (<code>USAGE_DATABASE_URL</code>) and is never shown here — use a read-only database user. Queries must be a single <code>SELECT</code> and can use <code>:period_start</code> / <code>:period_end</code>.</p>
-      ${['loading', 'upi', 'users'].map(k => `<label>${{ loading: 'Loading — returns enterprise_id, amount', upi: 'UPI — returns enterprise_id, txn_count, txn_amount', users: 'Users — returns enterprise_id, admin_users, spender_users, total_users' }[k]}
+      ${['loading', 'upi', 'users', 'extras', 'spend'].map(k => `<label>${{ loading: 'Loading — returns enterprise_id, amount', upi: 'UPI — returns enterprise_id, txn_count, txn_amount, cnt_le_2500, amt_gt_2500', users: 'Users — returns enterprise_id, admin_users, maker_users, checker_users, approver_users, total_users', extras: 'Optional extras — enterprise_id, truck_count, driver_count, card_share_pct (fleet / conditional-UPI contracts)', spend: 'Optional spend — one row per transaction: enterprise_id, amount, txn_time (spend-based contracts)' }[k]}
         <textarea class="ds-q mono" data-k="${k}" rows="6" ${isAdmin ? '' : 'readonly'}>${esc(ds.queries[k])}</textarea></label>`).join('')}
       <div class="actions-row">
         ${isAdmin ? '<button id="ds-save">Save queries</button><button class="ghost" id="ds-reset">Reset to defaults</button>' : '<span class="muted">Only an admin can edit these queries.</span>'}

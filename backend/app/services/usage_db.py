@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.models import Setting
 
-QUERY_KEYS = {"loading": "USAGE_QUERY_LOADING", "upi": "USAGE_QUERY_UPI", "users": "USAGE_QUERY_USERS", "extras": "USAGE_QUERY_EXTRAS"}
+QUERY_KEYS = {"loading": "USAGE_QUERY_LOADING", "upi": "USAGE_QUERY_UPI", "users": "USAGE_QUERY_USERS", "extras": "USAGE_QUERY_EXTRAS", "spend": "USAGE_QUERY_SPEND"}
 
 # Defaults mirror the former CSV rules. Table and column names are a starting
 # point — an admin adapts them to the real schema on the Settings page.
@@ -58,6 +58,10 @@ GROUP BY enterprise_id""",
     # Optional. Leave empty if not needed. May return: card_share_pct, upi_spend_after_free,
     # truck_count, driver_count (fleet / spend-based contracts).
     "extras": "",
+    # Optional, for spend-based contracts ("first N transactions free, then 1% of spend"). Return one row per
+    # transaction: enterprise_id, amount, and (recommended) txn_time. The engine sorts by time, skips each
+    # enterprise's own N free transactions (from its contract) and sums the rest.
+    "spend": "",
 }
 
 _FORBIDDEN = re.compile(
@@ -109,7 +113,7 @@ def validate_query(sql: str) -> str:
 
 
 def optional(name: str) -> bool:
-    return name == "extras"
+    return name in ("extras", "spend")
 
 
 def get_queries(db: Session) -> dict[str, str]:
@@ -243,6 +247,8 @@ def fetch_snapshot_rows(db: Session, period: str) -> dict[str, dict]:
                 if qn == name and col in lower:
                     row[field] = row.get(field, 0.0) + _num(lower[col]) if field not in ("card_share_pct",) else _num(lower[col])
         out.setdefault("__supplied__", {}).setdefault(name, sorted(cols))
+    if q.get("spend", "").strip():
+        _apply_spend(db, period, q["spend"], out)
     supplied = out.pop("__supplied__", {})
     # enterprises seen anywhere get 0 for every column of every query that ran
     for eid, row in out.items():
@@ -250,3 +256,34 @@ def fetch_snapshot_rows(db: Session, period: str) -> dict[str, dict]:
             if qn in supplied and col in supplied[qn] and field not in row:
                 row[field] = 0.0
     return out
+
+
+def _free_txns_by_enterprise(db: Session) -> dict[str, int]:
+    """free_txns of each enterprise's spend-based contract component (newest version wins)."""
+    from app.models import BillingAccount
+    out: dict[str, int] = {}
+    for a in db.query(BillingAccount).all():
+        for c in sorted(a.contracts, key=lambda c: c.version):
+            if c.status not in ("locked", "superseded"):
+                continue
+            for k in c.components:
+                if k.component_type == "spend_percent_after_free_txns":
+                    for e in a.enterprises:
+                        out[e.enterprise_id] = int((k.params or {}).get("free_txns") or 0)
+    return out
+
+
+def _apply_spend(db: Session, period: str, sql: str, out: dict[str, dict]) -> None:
+    free = _free_txns_by_enterprise(db)
+    if not free:
+        return
+    rows, _ = _run(sql, period)
+    by_ent: dict[str, list[tuple]] = {}
+    for i, r in enumerate(rows):
+        low = {k.lower(): v for k, v in r.items()}
+        eid = _eid(r)
+        if eid in free:
+            by_ent.setdefault(eid, []).append((str(low.get("txn_time") or low.get("ts") or low.get("transaction_date") or ""), i, _num(low.get("amount"))))
+    for eid, n in free.items():
+        txns = sorted(by_ent.get(eid, []))
+        out.setdefault(eid, {})["upi_spend_after_free"] = round(sum(a for _, _, a in txns[n:]), 2)

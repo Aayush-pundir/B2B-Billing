@@ -32,6 +32,93 @@ def _date_dmy(text: str) -> str | None:
 
 # ------------------------------------------------------------------ components
 
+_LAKH = r"(?:lakhs?|lacs?|lac|l)\b"
+
+
+def _amount(txt: str) -> float | None:
+    """'₹15,000' / '15k' / '8K' / '50L' / '.75' -> float rupees (L = lakh)."""
+    m = re.search(r"₹?\s*(\d[\d,]*(?:\.\d+)?|\.\d+)\s*(k|lakhs?|lacs?|lac|l)?\b", txt.strip(), re.I)
+    if not m:
+        return None
+    v = float(m.group(1).replace(",", ""))
+    unit = (m.group(2) or "").lower()
+    return v * 1000 if unit == "k" else v * 100000 if unit.startswith("l") else v
+
+
+def _parse_slabs_rate_first(t: str) -> list[dict] | None:
+    """'2% upto 10 lakh, 1.75% 11 lakh to 25 lakh, 1% 51 lakh & above' — each rate is followed by its own boundary."""
+    parts = re.split(r"(?<![\d.])(?=\d+(?:\.\d+)?\s*%)", t)
+    tiers, prev = [], 0.0
+    for part in parts:
+        m = re.match(r"(\d+(?:\.\d+)?)\s*%(.*)$", part.strip(), re.S)
+        if not m:
+            continue
+        rate, rest = round(float(m.group(1)) / 100, 6), m.group(2)
+        mn = re.search(r"\bor\s*([\d,.]+\s*k?)\b", rest, re.I)
+        nums = [_amount(x.group(0)) for x in re.finditer(r"\d[\d,]*(?:\.\d+)?\s*" + _LAKH, rest, re.I)]
+        nums = [n for n in nums if n]
+        if re.search(r"above|beyond|&\s*above", rest, re.I):
+            upto = None
+        elif nums:
+            upto = max(nums)
+        else:
+            return None
+        if upto is not None:
+            if upto <= prev:
+                return None
+            prev = upto
+        tiers.append({"upto": upto, "rate": rate, "min": _amount(mn.group(1)) if mn else 0})
+    if len(tiers) < 2 or any(x["upto"] is None for x in tiers[:-1]):
+        return None
+    tiers[-1]["upto"] = None
+    return tiers
+
+
+def parse_slabs(text: str) -> list[dict] | None:
+    t0 = (text or "").replace("–", "-")
+    first_rate, first_lakh = re.search(r"\d\s*%", t0), re.search(r"\d\s*" + _LAKH, t0, re.I)
+    if first_rate and first_lakh and first_rate.start() < first_lakh.start():
+        got = _parse_slabs_rate_first(t0.replace("₹", ""))
+        if got:
+            return got
+    return _parse_slabs_boundary_first(text)
+
+
+def _parse_slabs_boundary_first(text: str) -> list[dict] | None:
+    """Parse contract slab wording like '0-10L 2%; 10-15L 1.8%; >15L 1.5%' or '1% or 15K ... above 50L 0.5% or 30K'
+    into [{upto, rate, min}] (upto in rupees, None = unbounded). Returns None unless the result is unambiguous."""
+    t = (text or "").replace("–", "-").replace("→", " ").replace("₹", "")
+    t = re.sub(r"\bWIH\b|whichever is higher|\(whole[^)]*\)|\.\s*Sheet:.*$", " ", t, flags=re.I)
+    # split into one segment per percentage
+    pieces = re.split(r"(?<=%)(?:\s+or\s+[\d,.]+\s*k?)?\s*[;,]?\s*", t)
+    segs = re.findall(r"([^%]*?)(\d+(?:\.\d+)?|\.\d+)\s*%(?:[^%\d]{0,40}?\bor\s*([\d,.]+\s*k?\b))?", t, flags=re.I)
+    if len(segs) < 2:
+        return None
+    tiers, prev_upto = [], 0.0
+    for lead, rate, mn in segs:
+        lead = lead.strip(" ;,:→-")
+        rate = round(float(rate) / 100, 6)
+        above = re.search(r"above|>|beyond|and above|more than", lead, re.I)
+        nums = [_amount(m.group(0)) for m in re.finditer(r"\d[\d,]*(?:\.\d+)?\s*" + _LAKH, lead, re.I)]
+        nums = [n for n in nums if n]
+        if above or (not nums and tiers and segs[-1][1] == str(rate * 100)):
+            upto = None
+        elif nums:
+            upto = max(nums)
+        else:
+            return None
+        tiers.append({"upto": upto, "rate": rate, "min": _amount(mn) if mn else 0})
+        if upto is not None:
+            if upto <= prev_upto:
+                return None
+            prev_upto = upto
+    if tiers[-1]["upto"] is not None:  # the open-ended top slab must be last
+        tiers[-1]["upto"] = None
+    if any(t["upto"] is None for t in tiers[:-1]):
+        return None
+    return tiers
+
+
 def _platform(r: dict) -> tuple[list[dict], list[str]]:
     A = r.get("A_platform") or {}
     t, rule = A.get("type") or "None", A.get("rule") or ""
@@ -43,6 +130,10 @@ def _platform(r: dict) -> tuple[list[dict], list[str]]:
         return [], notes
     if t == "Load % (GTV)":
         if rate is None:
+            slab_text = A.get("rate_M") if isinstance(A.get("rate_M"), str) else ""
+            tiers = parse_slabs(slab_text) or parse_slabs(str(r.get("contract_text") or ""))
+            if tiers:
+                return [{"component_type": "load_percent_tiered", "label": "Platform fee — slabs on Add Money", "params": {"tiers": tiers, "mode": "whole"}}], ["slabs_parsed"]
             return manual("rate is not numeric in the legacy sheet")
         p = {"rate": rate}
         if _num(A.get("min_N")):
@@ -81,9 +172,28 @@ def _platform(r: dict) -> tuple[list[dict], list[str]]:
         if low.startswith("bbps fee"):
             return [{"component_type": "bbps_fee", "label": "BBPS fee", "params": {"amount": _money(rule)}}], notes
         if "add money × 0.2%" in low and "3,500" in rule:
-            return [{"component_type": "load_percent_plus_fixed", "label": "Platform fee", "params": {"rate": 0.002, "fixed": 3500.0}}], ["fleet_excess_not_modelled"]
-        if "slab" in low and ("add money" in low or "contract slab" in low):
-            return manual("tiered slabs — sheet applied only the first slab")
+            m = re.search(r"up to (\d+) trucks?; ₹\s*([\d,]+)/truck", rule)
+            comps = [{"component_type": "load_percent", "label": "Platform fee — % of Add Money", "params": {"rate": 0.002}}]
+            if m:
+                comps.append({"component_type": "per_unit_fleet", "label": "Fleet fee", "params": {"base": 3500.0, "included_units": float(m.group(1)), "rate_per_extra_unit": float(m.group(2).replace(",", "")), "unit": "truck"}})
+            else:
+                comps.append({"component_type": "fixed_amount", "label": "Fixed fee", "params": {"amount": 3500.0}})
+            return comps, []
+        m = re.search(r"₹\s*([\d,]+) per month hard-typed \(incl\. ₹\s*([\d,]+) BBPS fee\)", rule, re.I)
+        if m:
+            tot, bbps = float(m.group(1).replace(",", "")), float(m.group(2).replace(",", ""))
+            return [{"component_type": "fixed_amount", "label": "Platform fee", "params": {"amount": tot - bbps}}, {"component_type": "bbps_fee", "label": "BBPS fee", "params": {"amount": bbps}}], notes
+        if ("slab" in low or "tiered load fee" in low) and ("add money" in low or "contract slab" in low):
+            contract_text = str(r.get("contract_text") or "")
+            tiers = None if "tiered load fee" in low else (parse_slabs(contract_text) or parse_slabs(rule))
+            if tiers is None and "tiered load fee" in low:  # '>₹60,00,000 → 0.70% of ENTIRE L; else 0.80%; minimum ₹30,000'
+                m = re.search(r"L > ₹?([\d,]+) → ([\d.]+)% of ENTIRE L; else ([\d.]+)% of L; subject to minimum ₹?([\d,]+)", rule)
+                if m:
+                    cut, hi, lo, mn = float(m.group(1).replace(",", "")), float(m.group(2)) / 100, float(m.group(3)) / 100, float(m.group(4).replace(",", ""))
+                    tiers = [{"upto": cut, "rate": lo, "min": mn}, {"upto": None, "rate": hi, "min": mn}]
+            if tiers:
+                return [{"component_type": "load_percent_tiered", "label": "Platform fee — slabs on Add Money", "params": {"tiers": tiers, "mode": "whole"}}], ["slabs_parsed"]
+            return manual("tiered slabs could not be parsed")
         if low.startswith("fixed saas:") and "×" in rule:
             amt = _money(rule)
             facs = [float(x) for x in re.findall(r"×\s*(1\.\d+)", rule)]
