@@ -36,7 +36,7 @@ def previous_period(today: datetime.date) -> str:
     return last_month.strftime("%Y-%m")
 
 
-def tick(db, today: datetime.date | None = None, steps: tuple[str, ...] = ("run", "recurring", "dunning", "credit")) -> dict:
+def tick(db, today: datetime.date | None = None, steps: tuple[str, ...] = ("run", "recurring", "renewals", "dunning", "credit")) -> dict:
     from app.routers.billing_routes import RunExists, run_from_database  # lazy: avoids an import cycle
 
     today = today or datetime.date.today()
@@ -71,6 +71,17 @@ def tick(db, today: datetime.date | None = None, steps: tuple[str, ...] = ("run"
         result["steps"]["recurring"] = {"generated": len(made), "invoices": [m["invoice_no"] for m in made]}
         if made:
             _log(db, "automation.recurring", f"generated {len(made)}: {', '.join(m['invoice_no'] for m in made)}")
+
+    if "renewals" in steps:
+        from app.services import billing_v2, renewals
+        due = renewals.upcoming(db, today, 45)
+        drafts = billing_v2.apply_escalations(db, (today + datetime.timedelta(days=30)).isoformat(), SystemUser.email)
+        result["steps"]["renewals"] = {"due": len([r for r in due if r["status"] == "due"]), "overdue": len([r for r in due if r["status"] == "overdue"]),
+                                       "escalation_drafts": len(drafts)}
+        if drafts:
+            _log(db, "automation.escalations", f"{len(drafts)} draft contract version(s) created for review")
+        if due:
+            _log(db, "automation.renewals", f"{len(due)} subscription renewal(s) due or overdue")
 
     if "dunning" in steps:
         out = reminders.run_reminders(db, today)

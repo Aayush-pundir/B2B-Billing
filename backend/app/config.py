@@ -11,6 +11,8 @@ class Settings:
     def __init__(self) -> None:
         self.DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/billing.db")
         self.JWT_SECRET = os.getenv("JWT_SECRET") or secrets.token_hex(32)
+        # Dev login lets anyone pick a role — fine locally, NOT for a public deployment. Set ALLOW_DEV_LOGIN=0 once SSO is configured.
+        self.ALLOW_DEV_LOGIN = os.getenv("ALLOW_DEV_LOGIN", "1").lower() in ("1", "true", "yes")
         self.BOOTSTRAP_ADMIN_EMAIL = os.getenv("BOOTSTRAP_ADMIN_EMAIL", "admin@example.local")
 
         self.ORG_NAME = os.getenv("ORG_NAME", "Your Company Pvt Ltd")

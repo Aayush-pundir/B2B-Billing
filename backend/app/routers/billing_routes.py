@@ -355,22 +355,33 @@ def push_run_to_zoho(run_id: int, db: Session = Depends(get_db), user: User = De
         raise HTTPException(400, "Only an approved run can be pushed to Zoho")
     pushed, failed = [], []
     for inv in run.invoices:
-        if inv.status == "pushed":
+        if inv.zoho_invoice_id or inv.status == "cancelled":
             continue
         client = db.query(Client).get(inv.client_id)
-        if not client.zoho_contact_id:
-            failed.append({"invoice_no": inv.invoice_no, "reason": "client has no Zoho contact"})
-            continue
-        period_label = f"Invoice for the month of {run.period}"
-        breakdown_lines = [f"{l['label']}: ₹{l['amount']:,.2f} ({l['calc_detail']})" for l in inv.lines]
-        notes = "\n".join(breakdown_lines) + f"\n{inv.gst_type}: ₹{inv.gst:,.2f} · TDS: ₹{inv.tds:,.2f} · Total: ₹{inv.total:,.2f}"
+        account = db.query(BillingAccount).filter(BillingAccount.client_id == client.id).first()
+        contact_id = client.zoho_contact_id
+        if not contact_id:  # create the contact on the fly, using the Zoho billing name when we know it
+            try:
+                contact_id = zoho.create_contact((account.zoho_billing_name if account and account.zoho_billing_name else client.name), client.gst)["contact_id"]
+                client.zoho_contact_id = contact_id
+            except Exception as exc:
+                failed.append({"invoice_no": inv.invoice_no, "reason": f"could not create Zoho contact: {exc}"})
+                continue
+        notes = f"Platform Fee {run.period}"
+        if account is not None and not account.auto_debit:
+            notes += " — DO NOT AUTO DEBIT: collect manually."
         try:
-            result = zoho.push_draft_invoice(client.zoho_contact_id, period_label, inv.total, notes)
+            if any(l.get("component_type") for l in inv.lines or []):  # v2: one Zoho line per charge
+                lines = [{"label": l["label"], "detail": l.get("calc_detail", ""), "amount": l["amount"]} for l in inv.lines if l.get("amount")]
+                result = zoho.push_invoice_lines(contact_id, inv.invoice_no, (inv.issued_at or inv.created_at).date().isoformat(), inv.due_date, lines, notes)
+            else:
+                breakdown = [f"{l['label']}: ₹{l['amount']:,.2f} ({l['calc_detail']})" for l in inv.lines]
+                result = zoho.push_draft_invoice(contact_id, f"Invoice for the month of {run.period}", inv.total,
+                                                 "\n".join(breakdown) + f"\n{inv.gst_type}: ₹{inv.gst:,.2f} · TDS: ₹{inv.tds:,.2f} · Total: ₹{inv.total:,.2f}")
         except Exception as exc:
             failed.append({"invoice_no": inv.invoice_no, "reason": str(exc)})
             continue
-        inv.zoho_invoice_id = result["invoice_id"]
-        inv.status = "pushed"
+        inv.zoho_invoice_id = result["invoice_id"]  # status is left alone: the invoice stays issued/sent/paid natively
         pushed.append(inv.invoice_no)
     if pushed and not failed:
         run.status = "pushed"

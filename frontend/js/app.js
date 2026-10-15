@@ -21,6 +21,7 @@ const PAGES = [
   { id: 'crm', label: 'CRM Sync', icon: 'fa-rotate', group: 'Collections', sub: 'Keep client identity in sync with your CRM' },
   { id: 'accounting', label: 'Accounting', icon: 'fa-book', group: 'Accounting', sub: 'Chart of accounts, journals, ledger and period lock' },
   { id: 'finreports', label: 'Financial reports', icon: 'fa-chart-pie', group: 'Accounting', sub: 'Trial balance, P&L, balance sheet, aging and GST' },
+  { id: 'insights', label: 'Revenue insights', icon: 'fa-chart-line', group: 'Insights', sub: 'Trends, mix, concentration, retention, risk and forecast' },
   { id: 'reports', label: 'Reports', icon: 'fa-chart-column', group: 'Insights', sub: 'Export billing and collections reports' },
   { id: 'metrics', label: 'Metrics & Add-ons', icon: 'fa-layer-group', group: 'Insights', sub: 'Usage metrics and add-on line items' },
   { id: 'automation', label: 'Automation', icon: 'fa-robot', group: 'Admin', sub: 'Approvals, scheduled runs, reminders and credit rules' },
@@ -58,7 +59,8 @@ async function boot() {
   }
 }
 
-function showLogin() {
+async function showLogin() {
+  const prov = await Apx.providers().catch(() => ({ dev: true }));
   document.getElementById('app').style.display = 'none';
   const el = document.getElementById('login-screen');
   el.style.display = 'flex';
@@ -79,11 +81,12 @@ function showLogin() {
         <div class="login-card">
           <h1>Welcome back</h1>
           <p>Sign in to your billing workspace.</p>
-          <label>Role</label>
+          ${prov.dev === false ? '<div class="alert-bar warn"><i class="fa-solid fa-lock"></i><span>Dev sign-in is disabled on this server. Use single sign-on.</span></div>' : ''}
+          <div style="${prov.dev === false ? 'display:none' : ''}"><label>Role</label>
           <div class="role-pills">${roles.map(r => `<div class="pill ${r === selectedRole ? 'active' : ''}" data-role="${r}">${r}</div>`).join('')}</div>
           <label for="login-email">Email</label>
           <input type="email" id="login-email" placeholder="you@company.com" value="admin@example.local" />
-          <button id="login-btn" class="btn-lg">Sign in <i class="fa-solid fa-arrow-right"></i></button>
+          <button id="login-btn" class="btn-lg">Sign in <i class="fa-solid fa-arrow-right"></i></button></div>
           <div class="login-note">Dev sign-in — SSO is available once OAuth is configured.</div>
         </div>
       </section>
@@ -1399,6 +1402,6 @@ const RENDERERS = {
   audit: renderAudit,
   settings: renderSettings,
 };
-Object.assign(RENDERERS, MODULE_RENDERERS, V2_RENDERERS);
+Object.assign(RENDERERS, MODULE_RENDERERS, V2_RENDERERS, INSIGHT_RENDERERS);
 
 boot();

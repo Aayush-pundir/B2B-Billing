@@ -11,12 +11,12 @@ const v2cat = async () => V2CAT || (V2CAT = await Apx.v2('/catalogue'));
 async function renderAccountsV2(content) {
   const tab = state.v2Tab || 'accounts';
   if (state.v2Account && tab === 'accounts') return renderAccountDetail(content, state.v2Account);
-  const tabs = [['accounts', 'Accounts', 'fa-building-user'], ['exceptions', 'Exceptions', 'fa-triangle-exclamation'], ['groups', 'Groups', 'fa-people-group'], ['usage', 'Usage inputs', 'fa-database'], ['import', 'Import & mapping', 'fa-file-import']];
+  const tabs = [['accounts', 'Accounts', 'fa-building-user'], ['renewals', 'Renewals', 'fa-calendar-check'], ['exceptions', 'Exceptions', 'fa-triangle-exclamation'], ['groups', 'Groups', 'fa-people-group'], ['usage', 'Usage inputs', 'fa-database'], ['import', 'Import & mapping', 'fa-file-import']];
   content.innerHTML = `${isFinance() ? '' : '<div class="alert-bar warn"><i class="fa-solid fa-lock"></i><span>Only Finance can amend terms. You can view everything here.</span></div>'}${tabBar(tabs, tab)}<div id="v2-panel"></div>`;
   bindTabs(content, 'v2Tab', 'accounts');
   content.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => { state.v2Account = null; }));
   const panel = document.getElementById('v2-panel');
-  ({ accounts: v2AccountsTab, exceptions: v2ExceptionsTab, groups: v2GroupsTab, usage: v2UsageTab, import: v2ImportTab })[tab](panel);
+  ({ accounts: v2AccountsTab, renewals: v2RenewalsTab, exceptions: v2ExceptionsTab, groups: v2GroupsTab, usage: v2UsageTab, import: v2ImportTab })[tab](panel);
 }
 
 // ------------------------------- accounts list -------------------------------

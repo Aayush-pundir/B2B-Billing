@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,8 @@ class DevLoginRequest(BaseModel):
 
 @router.post("/auth/dev-login")
 def dev_login(payload: DevLoginRequest, response: Response, db: Session = Depends(get_db)):
+    if not get_settings().ALLOW_DEV_LOGIN:
+        raise HTTPException(403, "Dev login is disabled on this server — sign in with SSO")
     role = payload.role if payload.role in ROLES else "viewer"
     user = bootstrap_or_get_user(db, payload.email, role)
     token = create_token(user.email, user.role)
@@ -32,7 +34,7 @@ def providers():
     return {
         "microsoft": bool(settings.AZURE_CLIENT_ID and settings.AZURE_CLIENT_SECRET),
         "google": bool(settings.GOOGLE_CLIENT_ID and settings.GOOGLE_CLIENT_SECRET),
-        "dev": True,
+        "dev": settings.ALLOW_DEV_LOGIN,
     }
 
 

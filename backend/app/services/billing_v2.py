@@ -341,3 +341,31 @@ def compute_run(db: Session, period: str, snaps: dict[str, dict], clients_by_id:
         if len(needing) >= 3:
             _ex(run_ex, "USAGE_FIELD_MISSING", "high", f"The usage feed does not supply '{field}' — {len(needing)} accounts with user-based charges would under-bill. Update the usage query.")
     return {"results": results, "run_exceptions": run_ex}
+
+
+def apply_escalations(db: Session, through: str, user_email: str) -> list[dict]:
+    """Create DRAFT contract versions with escalated prices for every rule due on or before `through`.
+    History is never mutated; Finance reviews and locks each draft."""
+    from app.models import ContractComponent, EscalationRule
+    created = []
+    for r in db.query(EscalationRule).filter(EscalationRule.active.is_(True), EscalationRule.next_date <= through).all():
+        a = db.query(BillingAccount).get(r.account_id)
+        base = active_contract(a, r.next_date) or max((c for c in a.contracts if c.status in ("locked", "superseded")), key=lambda c: c.version, default=None)
+        if base is None or any(c.status == "draft" and c.source == "escalation" and c.valid_from == r.next_date for c in a.contracts):
+            continue
+        label = f"+₹{r.value:g}" if r.kind == "fixed_increment" else f"+{r.value * 100:g}%"
+        nv = Contract(account_id=a.id, version=max(c.version for c in a.contracts) + 1, valid_from=r.next_date, status="draft", source="escalation",
+                      created_by=user_email, notes=f"Escalation {label} from {r.next_date}", billing_frequency=base.billing_frequency, gst_mode=base.gst_mode,
+                      gst_rate=base.gst_rate, overall_min_amount=base.overall_min_amount, overall_cap_amount=base.overall_cap_amount,
+                      mg_effective_from=base.mg_effective_from, prorate_mg=base.prorate_mg, subscription_covers=base.subscription_covers)
+        db.add(nv)
+        db.flush()
+        for k in base.components:
+            params = engine2.scale_params(k.component_type, k.params or {}, r.kind, r.value) if r.applies_to in ("all", k.component_type) else dict(k.params or {})
+            db.add(ContractComponent(contract_id=nv.id, component_type=k.component_type, label=k.label, params=params, sort_order=k.sort_order, valid_from=k.valid_from, valid_to=k.valid_to))
+        r.last_applied_date = r.next_date
+        nd = datetime.date.fromisoformat(r.next_date)
+        r.next_date = nd.replace(year=nd.year + 1).isoformat()
+        created.append({"account": a.display_name, "version": nv.version, "effective": nv.valid_from})
+    db.commit()
+    return created

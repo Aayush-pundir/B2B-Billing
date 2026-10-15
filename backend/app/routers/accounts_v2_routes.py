@@ -12,7 +12,7 @@ from app.database import get_db
 from app.models import (AccountEnterprise, AccountEvent, BillingAccount, BillingException, BillingGroup, BillingGroupMember, Client,
                         Contract, ContractComponent, EscalationRule, SubscriptionInvoice, UsageSnapshot, User)
 from app.routers.core_routes import log_action
-from app.services import billing_v2, engine2, importer_v2, snapshots, usage_db
+from app.services import billing_v2, engine2, importer_v2, renewals, snapshots, usage_db
 from app.services.auth import require_user, require_write
 
 router = APIRouter(prefix="/api/v2")
@@ -307,29 +307,8 @@ class ApplyEscIn(BaseModel):
 
 @router.post("/escalations/apply")
 def apply_escalations(p: ApplyEscIn, db: Session = Depends(get_db), user: User = Depends(require_write("commercials"))):
-    """Create DRAFT contract versions with escalated prices for every rule that is due. History is never mutated;
-    Finance reviews and locks each draft (price changes always need sign-off)."""
-    through = _date(p.through, "through")
-    created = []
-    for r in db.query(EscalationRule).filter(EscalationRule.active.is_(True), EscalationRule.next_date <= through).all():
-        a = db.query(BillingAccount).get(r.account_id)
-        base = billing_v2.active_contract(a, r.next_date) or max((c for c in a.contracts if c.status == "locked"), key=lambda c: c.version, default=None)
-        if base is None or any(c.status == "draft" and c.source == "escalation" and c.valid_from == r.next_date for c in a.contracts):
-            continue
-        nv = Contract(account_id=a.id, version=max(c.version for c in a.contracts) + 1, valid_from=r.next_date, status="draft", source="escalation",
-                      created_by=user.email, notes=f"Escalation {r.value if r.kind == 'fixed_increment' else f'+{r.value * 100:g}%'} from {r.next_date}",
-                      billing_frequency=base.billing_frequency, gst_mode=base.gst_mode, gst_rate=base.gst_rate, overall_min_amount=base.overall_min_amount,
-                      overall_cap_amount=base.overall_cap_amount, mg_effective_from=base.mg_effective_from, prorate_mg=base.prorate_mg, subscription_covers=base.subscription_covers)
-        db.add(nv)
-        db.flush()
-        for k in base.components:
-            params = engine2.scale_params(k.component_type, k.params or {}, r.kind, r.value) if r.applies_to in ("all", k.component_type) else dict(k.params or {})
-            db.add(ContractComponent(contract_id=nv.id, component_type=k.component_type, label=k.label, params=params, sort_order=k.sort_order, valid_from=k.valid_from, valid_to=k.valid_to))
-        r.last_applied_date = r.next_date
-        nd = datetime.date.fromisoformat(r.next_date)
-        r.next_date = nd.replace(year=nd.year + 1).isoformat()
-        created.append({"account": a.display_name, "version": nv.version, "effective": nv.valid_from})
-    db.commit()
+    """Create DRAFT contract versions with escalated prices for every rule that is due (Finance reviews and locks each)."""
+    created = billing_v2.apply_escalations(db, _date(p.through, "through"), user.email)
     log_action(db, user, "v2.escalations.apply", "contract", f"created={len(created)}")
     return {"drafts_created": created}
 
@@ -563,3 +542,30 @@ def resolve_exception(exception_id: int, p: ResolveIn, db: Session = Depends(get
     db.commit()
     log_action(db, user, "v2.exception.resolve", "billing_exception", f"{e.code} {p.status}: {p.note}")
     return {"ok": True}
+
+
+# ------------------------------- renewals -------------------------------
+
+@router.get("/renewals")
+def list_renewals(horizon_days: int = 75, db: Session = Depends(get_db), user: User = Depends(require_user)):
+    rows = renewals.upcoming(db, horizon_days=max(1, min(horizon_days, 400)))
+    return {"rows": rows, "overdue_value": round(sum(r["expected_amount"] for r in rows if r["status"] == "overdue"), 2),
+            "due_value": round(sum(r["expected_amount"] for r in rows if r["status"] == "due"), 2)}
+
+
+class RenewIn(BaseModel):
+    amount: float | None = None
+    invoice: bool = True
+
+
+@router.post("/renewals/{account_id}/raise")
+def raise_renewal(account_id: int, p: RenewIn, db: Session = Depends(get_db), user: User = Depends(require_write("commercials"))):
+    a = _acct(db, account_id)
+    try:
+        res = renewals.raise_renewal(db, a, p.amount, p.invoice, user.email)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except HTTPException:
+        raise
+    log_action(db, user, "v2.renewal.raise", "billing_account", f"{a.display_name} {res}")
+    return res

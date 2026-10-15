@@ -34,3 +34,10 @@ doesn't own your usage data. Ordered by value to this business, not by Zoho's me
 - **Leakage detection:** usage billed vs usage consumed, customers with usage but no locked terms, terms never invoiced.
 - **Cash application AI:** learn from past matches to raise auto-match confidence; split/partial/advance handling.
 - **Accounting sync:** two-way Zoho Books / Tally push for GL, so finance keeps its books of record if desired.
+
+
+## Billing engine v2 follow-ups (DONE)
+- Zoho Books push: one line item per charge, idempotent by invoice reference, auto-creates the contact from the Zoho billing name, flags no-auto-debit accounts.
+- Subscription renewals: forecast (overdue/due, expected amount from escalation rules), one-click raise that records the subscription and issues the invoice into the books and GST; scheduler step creates escalation drafts.
+- Revenue insights: trend, mix by charge type, concentration (top-10, HHI), movers, NRR/churn, take rate, minimum-top-up analysis, declining customers, DSO/on-time, cohorts, forecast, data health.
+- Hardening: database indexes, ALLOW_DEV_LOGIN switch, 37-test automated suite (`pytest backend/tests`).
