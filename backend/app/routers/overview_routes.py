@@ -126,6 +126,9 @@ def _attention(db: Session, period: str, today: datetime.date) -> list[dict]:
         out.append({"level": "warn", "text": f"{unmapped} account(s) have no platform enterprise ID yet", "page": "accounts", "cta": "Map"})
     billable = billing_v2.billable_accounts(db, period)  # dropped, paused and not-yet-live accounts cannot bill, so they are not "to model"
     unmodelled = sum(1 for a in billable for k in (billing_v2.active_contract(a, period).components) if k.component_type == "manual_formula")
+    no_state = [a for a in billable if not (a.client.state_code or "").strip() and (a.client.gst_treatment or "") != "overseas"]
+    if no_state:
+        out.append({"level": "high", "text": f"{len(no_state)} billable customer(s) have no GST state on file and will be withheld", "page": "clients", "cta": "Pull from Zoho"})
     pending = sum(len(billing_v2.open_assumptions(billing_v2.active_contract(a, period))) for a in billable)
     if pending:
         out.append({"level": "info", "text": f"{pending} interpreted contract term(s) wait for Finance to confirm", "page": "accounts", "cta": "Confirm"})
