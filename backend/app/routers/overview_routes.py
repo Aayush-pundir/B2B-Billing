@@ -31,16 +31,23 @@ router = APIRouter(prefix="/api")
 @router.get("/dashboard")
 def dashboard(db: Session = Depends(get_db), user: User = Depends(require_user)):
     """The numbers on the home page, computed in the database instead of shipping every row to the browser."""
+    today = datetime.date.today()
+    return dashboard_payload(db, today, _prev_period(today.strftime("%Y-%m")))
+
+
+def dashboard_payload(db: Session, today: datetime.date, period: str) -> dict:
+    """period is the month being closed. KPIs and the chart end at the latest month that has actually been issued,
+    so a month still in review (draft invoices) does not show as ₹0."""
+    kpi_period = db.query(func.max(Invoice.period)).filter(Invoice.status.notin_(("draft", "cancelled")), Invoice.period <= period).scalar() or period
     inv_count, revenue = db.query(func.count(Invoice.id), func.coalesce(func.sum(Invoice.total), 0.0)).one()
     counts = dict(db.query(Invoice.run_id, func.count(Invoice.id)).group_by(Invoice.run_id).all())
     runs = db.query(BillingRun).order_by(BillingRun.id.desc())
-    today = datetime.date.today()
-    period = _prev_period(today.strftime("%Y-%m"))  # the month being closed
     return {
         "period": period,
+        "kpi_period": kpi_period,
         "close": _close_status(db, period),
-        "kpis": _kpis(db, period, today),
-        "trend": _trend(db, period),
+        "kpis": _kpis(db, kpi_period, today),
+        "trend": _trend(db, kpi_period),
         "attention": _attention(db, period, today),
         "clients": db.query(func.count(Client.id)).scalar(),
         "locked_commercials": db.query(func.count(Commercial.id)).filter(Commercial.status == "locked").scalar(),

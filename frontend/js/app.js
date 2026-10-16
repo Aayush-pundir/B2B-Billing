@@ -239,7 +239,7 @@ async function renderDashboard(content) {
       <a class="btn" href="#close" onclick="state.close=Object.assign(state.close||{}, {period:'${d.period}'})">${cta} <i class="fa-solid fa-arrow-right"></i></a></div>
 
     <div class="kpi-row">
-      <div class="kpi"><div class="kpi-label">Billed in ${esc(monthLabel(d.period))}</div><div class="kpi-value">${compactRs(k.billed)} ${change}</div><div class="kpi-sub">${k.prev_billed ? 'vs ' + compactRs(k.prev_billed) + ' the month before' : 'taxable value, before GST'}</div></div>
+      <div class="kpi"><div class="kpi-label">Billed in ${esc(monthLabel(d.kpi_period || d.period))}</div><div class="kpi-value">${compactRs(k.billed)} ${change}</div><div class="kpi-sub">${k.prev_billed ? 'vs ' + compactRs(k.prev_billed) + ' the month before' : 'taxable value, before GST'}</div></div>
       <div class="kpi"><div class="kpi-label">Outstanding</div><div class="kpi-value">${compactRs(k.outstanding)}</div><div class="kpi-sub">open invoices, incl. GST</div></div>
       <div class="kpi ${k.overdue ? 'bad' : ''}"><div class="kpi-label">Overdue</div><div class="kpi-value">${compactRs(k.overdue)}</div><div class="kpi-sub">${k.overdue_count} invoice(s) past due</div></div>
       <div class="kpi"><div class="kpi-label">Billing accounts</div><div class="kpi-value">${k.accounts}</div><div class="kpi-sub">${d.clients} customers on file</div></div>
