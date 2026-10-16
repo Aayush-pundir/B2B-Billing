@@ -287,3 +287,51 @@ def test_quick_search_spans_records_and_ignores_noise(fin):
     r = fin.get(f"/api/search?q={name[:4]}").json()
     assert any(c["name"] == name for c in r["customers"])
     assert fin.get("/api/search?q=zzzzzz-nothing").json()["customers"] == []
+
+
+def test_passcode_signin_assigns_roles_on_the_server(monkeypatch):
+    from app.config import get_settings
+    from fastapi.testclient import TestClient
+    from app.main import app
+    s = get_settings()
+    monkeypatch.setattr(s, "ACCESS_PASSCODE", "team-secret")
+    c = TestClient(app)
+    assert c.get("/auth/providers").json()["passcode"] is True
+    assert c.post("/auth/dev-login", json={"email": "x@corp.com", "role": "admin", "passcode": "nope"}).status_code == 401
+    ok = c.post("/auth/dev-login", json={"email": "newbie@corp.com", "role": "admin", "passcode": "team-secret"})
+    assert ok.status_code == 200 and ok.json()["role"] == "viewer"          # asking for admin is ignored
+    assert c.get("/api/users").status_code == 403                           # and a viewer cannot manage users
+    boot = c.post("/auth/dev-login", json={"email": s.BOOTSTRAP_ADMIN_EMAIL.upper(), "passcode": "team-secret"})
+    assert boot.status_code == 200 and boot.json()["role"] == "admin"
+
+
+def test_passcode_attempts_are_throttled(monkeypatch):
+    from app.config import get_settings
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.routers import auth_routes
+    monkeypatch.setattr(get_settings(), "ACCESS_PASSCODE", "team-secret")
+    auth_routes._FAILS.clear()
+    c = TestClient(app)
+    codes = [c.post("/auth/dev-login", json={"email": "t@corp.com", "passcode": "bad"}).status_code for _ in range(10)]
+    assert codes[:8] == [401] * 8 and codes[8:] == [429, 429]
+    assert c.post("/auth/dev-login", json={"email": "t@corp.com", "passcode": "team-secret"}).status_code == 429
+    auth_routes._FAILS.clear()
+
+
+def test_hosted_server_without_passcode_fails_closed(monkeypatch):
+    from app.config import get_settings
+    from app.config import dev_login_allowed
+    s = get_settings()
+    monkeypatch.setattr(s, "HOSTED", True)
+    monkeypatch.setattr(s, "ACCESS_PASSCODE", "")
+    assert dev_login_allowed(s) is False
+    monkeypatch.setattr(s, "ACCESS_PASSCODE", "x")
+    assert dev_login_allowed(s) is True
+
+
+def test_database_url_is_normalised_for_managed_postgres():
+    from app.config import _normalise_db_url
+    assert _normalise_db_url("postgres://u:p@h/db") == "postgresql+psycopg2://u:p@h/db"
+    assert _normalise_db_url("postgresql://u:p@h/db") == "postgresql+psycopg2://u:p@h/db"
+    assert _normalise_db_url("sqlite:///x.db") == "sqlite:///x.db"

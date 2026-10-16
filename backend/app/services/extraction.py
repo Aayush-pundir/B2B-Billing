@@ -80,9 +80,18 @@ def is_pdf_scanned(path: str) -> bool:
     return True
 
 
+def _need_ocr():
+    try:
+        import easyocr
+    except ImportError:
+        raise ValueError("Scanned documents and photos need the OCR add-on, which this server was built without. "
+                         "Upload a digital PDF or Word file, or rebuild with WITH_OCR=1.")
+    return easyocr
+
+
 def extract_text_from_scanned_pdf(path: str) -> str:
     import fitz  # PyMuPDF
-    import easyocr
+    easyocr = _need_ocr()
 
     reader = easyocr.Reader(["en"], gpu=False, verbose=False)
     doc = fitz.open(path)
@@ -96,7 +105,7 @@ def extract_text_from_scanned_pdf(path: str) -> str:
 
 
 def extract_text_from_image(path: str) -> str:
-    import easyocr
+    easyocr = _need_ocr()
 
     reader = easyocr.Reader(["en"], gpu=False, verbose=False)
     result = reader.readtext(path, detail=0, paragraph=True)

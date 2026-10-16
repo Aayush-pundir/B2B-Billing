@@ -1,27 +1,39 @@
+# One web service (API + UI) and one managed Postgres database.
+# Plans are "free" so the first deploy costs nothing. Free Postgres is removed by Render after about 30 days
+# and the free web service sleeps when idle — move both to a paid plan before relying on this for real billing.
 services:
   - type: web
     name: b2b-billing
-    env: docker
+    runtime: docker
     dockerfilePath: ./Dockerfile
     plan: free
     healthCheckPath: /health
     envVars:
       - key: JWT_SECRET
         generateValue: true
+      # Render asks for these two when the blueprint is created (never stored in the repo).
+      - key: ACCESS_PASSCODE
+        sync: false
       - key: BOOTSTRAP_ADMIN_EMAIL
-        value: admin@example.local
+        sync: false
       - key: ORG_NAME
         value: Your Company Pvt Ltd
       - key: ORG_STATE_CODE
         value: "09"
       - key: DEFAULT_GST_RATE
         value: "18.0"
-      # Free-plan web services have an ephemeral filesystem — the SQLite
-      # file and uploaded agreements are wiped on every deploy/restart.
-      # Fine for a first look; for anything real, either:
-      #   1. Add a persistent Disk (paid instance type) mounted at /app/data, or
-      #   2. Point DATABASE_URL at a Render Postgres instance instead.
       - key: DATABASE_URL
-        value: sqlite:////app/data/billing.db
+        fromDatabase:
+          name: b2b-billing-db
+          property: connectionString
+      # Uploaded agreements live on the container disk (lost on restart on the free plan).
       - key: UPLOAD_DIR
         value: /app/data/uploads
+      # Optional, add in the Render dashboard when ready: USAGE_DATABASE_URL (read-only), SMTP_HOST / SMTP_PORT /
+      # SMTP_USER / SMTP_PASSWORD / SMTP_FROM, ZOHO_* credentials.
+
+databases:
+  - name: b2b-billing-db
+    plan: free
+    databaseName: billing
+    user: billing

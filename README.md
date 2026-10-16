@@ -73,24 +73,27 @@ sales/viewer) and any email. The first login using `BOOTSTRAP_ADMIN_EMAIL`
 
 ## Deploying (Render)
 
-The repo includes a `Dockerfile` and `render.yaml` blueprint — it builds and
-serves the whole app (frontend + API) as a single web service:
+`render.yaml` is a blueprint for one web service (API and UI together) plus a managed Postgres database.
 
-1. Push this repo to GitHub (already done if you're reading this from there).
-2. On [render.com](https://render.com): **New** → **Blueprint** → connect
-   this repo. Render reads `render.yaml` and creates the service automatically.
-3. First deploy takes a few minutes; you'll get a public `onrender.com` URL
-   serving the app.
+1. On [render.com](https://render.com): **New** → **Blueprint** → pick this repo and the `claude/eager-fermat-4k13sp` branch (or `main` once merged).
+2. Render asks for two values. They are never stored in the repo:
+   - `ACCESS_PASSCODE`: the shared team passcode for sign-in. Choose something long.
+   - `BOOTSTRAP_ADMIN_EMAIL`: your email. The first person to sign in with this address becomes admin.
+3. Apply. The first build takes a few minutes. The public `onrender.com` address serves the app.
+4. Sign in with your email and the passcode, then open **Users** and give each teammate their role (finance, accounts, sales, viewer). Anyone else who signs in starts as a read-only viewer; roles are never chosen on the login screen.
 
-**Data persistence note:** Render's free web-service plan has an ephemeral
-filesystem — the SQLite database and uploaded agreements are wiped on every
-deploy or restart. Fine for a first look. For anything real, either attach a
-persistent Disk (needs a paid instance type) at `/app/data`, or point
-`DATABASE_URL` at a managed Postgres instance instead (Render offers one;
-no code change needed, see below).
+On a hosted server the built-in sign-in only works when `ACCESS_PASSCODE` is set. Without it, sign-in is switched off, so a public deployment can never let visitors pick their own role. Wrong passcodes are throttled (8 per 5 minutes per client).
 
-`Procfile` is included as a fallback for buildpack-based hosts (Railway,
-Heroku) that don't use the Dockerfile directly.
+**Before using real billing data:**
+- Both plans in `render.yaml` are `free`. Render deletes a free Postgres database after about 30 days and the free web service sleeps when idle. Move both to a paid plan first.
+- Uploaded agreements are stored on the container disk, which is wiped on every deploy. Attach a persistent disk at `/app/data` (paid plans) if you rely on the files.
+- Optional settings go in the Render dashboard: `USAGE_DATABASE_URL` (read-only), `SMTP_*`, `ZOHO_*`.
+- Single sign-on (Microsoft or Google) is not finished in this version, so the shared passcode is the only hosted login.
+- Scanned-PDF and photo OCR is not included by default because it adds PyTorch (several GB). Digital PDFs and Word files work. Build with `--build-arg WITH_OCR=1` to include it.
+
+The test suite runs against Postgres as well as SQLite: `TEST_DATABASE_URL=postgresql://user@host/db pytest`.
+
+`Procfile` is included as a fallback for buildpack-based hosts (Railway, Heroku).
 
 ## Architecture
 

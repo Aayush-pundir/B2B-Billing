@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 _tmp = tempfile.mkdtemp()
-os.environ.update({"DATABASE_URL": f"sqlite:///{_tmp}/test.db", "UPLOAD_DIR": f"{_tmp}/up", "DISABLE_SCHEDULER": "1", "JWT_SECRET": "test-secret"})
+os.environ.update({"DATABASE_URL": os.environ.get("TEST_DATABASE_URL") or f"sqlite:///{_tmp}/test.db", "UPLOAD_DIR": f"{_tmp}/up", "DISABLE_SCHEDULER": "1", "JWT_SECRET": "test-secret"})
 os.environ.pop("USAGE_DATABASE_URL", None)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 

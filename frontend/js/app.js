@@ -82,12 +82,13 @@ async function showLogin() {
           <h1>Welcome back</h1>
           <p>Sign in to your billing workspace.</p>
           ${prov.dev === false ? '<div class="alert-bar warn"><i class="fa-solid fa-lock"></i><span>Dev sign-in is disabled on this server. Use single sign-on.</span></div>' : ''}
-          <div style="${prov.dev === false ? 'display:none' : ''}"><label>Role</label>
-          <div class="role-pills">${roles.map(r => `<div class="pill ${r === selectedRole ? 'active' : ''}" data-role="${r}">${r}</div>`).join('')}</div>
+          <div style="${prov.dev === false ? 'display:none' : ''}">${prov.passcode ? '' : `<label>Role</label>
+          <div class="role-pills">${roles.map(r => `<div class="pill ${r === selectedRole ? 'active' : ''}" data-role="${r}">${r}</div>`).join('')}</div>`}
           <label for="login-email">Email</label>
-          <input type="email" id="login-email" placeholder="you@company.com" value="admin@example.local" />
+          <input type="email" id="login-email" placeholder="you@company.com" value="${prov.passcode ? '' : 'admin@example.local'}" />
+          ${prov.passcode ? '<label for="login-passcode">Team passcode</label><input type="password" id="login-passcode" autocomplete="current-password" />' : ''}
           <button id="login-btn" class="btn-lg">Sign in <i class="fa-solid fa-arrow-right"></i></button></div>
-          <div class="login-note">Dev sign-in — SSO is available once OAuth is configured.</div>
+          <div class="login-note">${prov.passcode ? 'Ask your administrator for the team passcode. Your role is set by an administrator.' : 'Dev sign-in — SSO is available once OAuth is configured.'}</div>
         </div>
       </section>
     </div>`;
@@ -96,11 +97,14 @@ async function showLogin() {
     el.querySelectorAll('.pill').forEach(x => x.classList.remove('active'));
     p.classList.add('active');
   }));
+  el.querySelectorAll('input').forEach(i => i.addEventListener('keydown', (e) => { if (e.key === 'Enter') el.querySelector('#login-btn').click(); }));
   el.querySelector('#login-btn').addEventListener('click', async () => {
     const email = el.querySelector('#login-email').value.trim();
     if (!email) return toast('Enter an email', true);
     try {
-      const res = await Apx.devLogin(email, selectedRole);
+      const passEl = el.querySelector('#login-passcode');
+      const res = await Apx.devLogin(email, selectedRole, passEl ? passEl.value : '');
+      if (!res) throw new Error(passEl ? 'Wrong passcode' : 'Sign-in failed');
       state.user = res;
       el.style.display = 'none';
       showApp();

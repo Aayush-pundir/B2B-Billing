@@ -26,7 +26,7 @@ async function request(path, { method = 'GET', body, isForm = false } = {}) {
 
 const Apx = {
   // auth
-  devLogin: (email, role) => request('/auth/dev-login', { method: 'POST', body: { email, role } }),
+  devLogin: (email, role, passcode = '') => request('/auth/dev-login', { method: 'POST', body: { email, role, passcode } }),
   me: () => request('/auth/me'),
   logout: () => request('/auth/logout', { method: 'POST' }),
   providers: () => request('/auth/providers'),

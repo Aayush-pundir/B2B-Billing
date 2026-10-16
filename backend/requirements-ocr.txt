@@ -1,0 +1,2 @@
+# Optional: OCR for scanned agreements and photos. Pulls in PyTorch (several GB) — leave out of small hosts.
+easyocr>=1.7.0

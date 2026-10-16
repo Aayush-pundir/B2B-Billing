@@ -2,6 +2,7 @@ import datetime
 
 import jwt
 from fastapi import Cookie, Depends, HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -67,9 +68,9 @@ def require_write(entity: str):
 
 def bootstrap_or_get_user(db: Session, email: str, requested_role: str = "viewer") -> User:
     settings = get_settings()
-    user = db.query(User).filter(User.email == email).first()
+    user = db.query(User).filter(func.lower(User.email) == email.lower()).first()
     if user is None:
-        role = "admin" if email == settings.BOOTSTRAP_ADMIN_EMAIL else requested_role
+        role = "admin" if email.lower() == settings.BOOTSTRAP_ADMIN_EMAIL.lower() else requested_role
         user = User(email=email, role=role, provider="dev")
         db.add(user)
         db.commit()
