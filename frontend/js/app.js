@@ -274,6 +274,7 @@ async function renderClients(content) {
         <input type="file" id="bulk-file" accept=".csv,.xlsx,.xlsm" style="display:none" />
       </label>
       <label class="inline-check"><input type="checkbox" id="bulk-update" /> update existing</label>` : ''}
+      ${canEditClients() ? '<button class="secondary" id="zoho-pull" title="Link customers to their existing Zoho Books customers and fill GSTIN, state and e-mail"><i class="fa-solid fa-cloud-arrow-down"></i> Pull from Zoho</button>' : ''}
       <a class="btn ghost" href="${Apx.clientExportUrl()}"><i class="fa-solid fa-file-export"></i> Export</a>
       <input id="search" placeholder="Search customers…" style="margin-left:auto;min-width:220px" />
     </div>
@@ -398,6 +399,24 @@ async function renderClients(content) {
       if (res.skipped.length) document.getElementById('client-form-wrap').innerHTML = `<div class="alert-bar warn" style="display:block"><b>Skipped rows</b><br>${res.skipped.slice(0, 12).map(esc).join('<br>')}${res.skipped.length > 12 ? `<br>…and ${res.skipped.length - 12} more` : ''}</div>`;
       else navigate('clients');
     } catch (err) { toast(err.message, true); }
+  });
+  const pull = document.getElementById('zoho-pull');
+  if (pull) pull.addEventListener('click', async () => {
+    pull.disabled = true;
+    try {
+      const dry = await Apx.zohoSyncCustomers(true);
+      const n = dry.linked_by_gstin + dry.linked_by_name;
+      if (!confirm(`Zoho has ${dry.zoho_customers} customers. ${n} of your accounts match one by GSTIN or name (${dry.already_linked} already linked); ${dry.unmatched_account_count} have no match.\n\nLink them and fill in GSTIN, state and e-mail where blank?`)) { pull.disabled = false; return; }
+      const done = await Apx.zohoSyncCustomers(false);
+      const f = done.filled;
+      document.getElementById('client-form-wrap').innerHTML = `<div class="card"><div class="flex-between"><h3 style="margin:0">Pulled from Zoho</h3><i class="fa-solid fa-xmark close-statement" style="cursor:pointer"></i></div>
+        <p>Linked <b>${done.linked_by_gstin + done.linked_by_name}</b> customers (${done.linked_by_gstin} by GSTIN, ${done.linked_by_name} by name). Filled GSTIN for ${f.gst}, state for ${f.state}, e-mail for ${f.email}.</p>
+        ${done.suggestions.length ? `<p class="muted">Close but not linked (check these by hand):</p><ul class="plain">${done.suggestions.slice(0, 12).map(x => `<li>${esc(x.account)} ↔ ${esc(x.zoho_customer)} (${x.score})</li>`).join('')}</ul>` : ''}
+        ${done.unmatched_account_count ? `<p class="muted">${done.unmatched_account_count} account(s) have no customer in Zoho yet${done.unmatched_accounts.length ? ', for example ' + done.unmatched_accounts.slice(0, 5).map(esc).join(', ') : ''}. They are created in Zoho on the first push once their state is on file.</p>` : ''}</div>`;
+      document.querySelector('#client-form-wrap .close-statement').addEventListener('click', () => { document.getElementById('client-form-wrap').innerHTML = ''; });
+      toast('Customers pulled from Zoho');
+      clients.splice(0, clients.length, ...(await Apx.listClients())); applySearch();  // show the filled-in GSTIN and state straight away
+    } catch (e) { toast(e.message, true); pull.disabled = false; }
   });
   const searchBox = document.getElementById('search');
   const applySearch = () => {

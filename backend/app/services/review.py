@@ -7,7 +7,7 @@ import hashlib
 
 from sqlalchemy.orm import Session
 
-from app.models import Invoice, ReviewItem
+from app.models import BaselineAmount, Invoice, ReviewItem
 
 SPOT_PCT = 5  # share of otherwise-clean invoices pulled for a spot-check
 LABELS = {
@@ -42,6 +42,9 @@ def previous_subtotals(db: Session, period: str) -> dict[int, float]:
     for inv in (db.query(Invoice).filter(Invoice.period < period, Invoice.status != "cancelled", Invoice.doc_type == "invoice")
                 .order_by(Invoice.period, Invoice.id)):
         out[inv.client_id] = inv.subtotal
+    # before this system had issued anything, the previous system's last figure is the comparison
+    for b in db.query(BaselineAmount).filter(BaselineAmount.period < period).order_by(BaselineAmount.period):
+        out.setdefault(b.client_id, b.taxable)
     return out
 
 

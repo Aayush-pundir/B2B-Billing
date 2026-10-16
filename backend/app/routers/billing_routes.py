@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, defer
 
+from app.config import get_settings
 from app.database import get_db
 from app.models import Agreement, BillingAccount, BillingException, BillingRun, Client, Commercial, CreditNote, Invoice, Payment, User
 from app.services import anomalies, billing_v2, csv_parser, invoicing, review, settings_store, zoho_push, snapshots as usage_snapshots, usage_db, zoho
@@ -56,6 +57,8 @@ def _v2_invoice_result(v2: dict, client, org_state_code: str, tds_rate: float) -
     sub = float(v2["subtotal"])
     if sub <= 0:
         return None, "nothing to bill (no usage and no fixed commitment)"
+    if get_settings().REQUIRE_CUSTOMER_STATE and not (client.state_code or "").strip() and (client.gst_treatment or "") != "overseas":
+        return None, "withheld: CUSTOMER_STATE_MISSING (no state on file, so the GST type cannot be decided — pull customers from Zoho or fill the customer master)"
     gb = gst_breakup(sub, client.state_code, org_state_code, (v2["contract"].gst_rate or 0.18) * 100)
     tds = round(sub * tds_rate / 100.0, 2)
     lines = []

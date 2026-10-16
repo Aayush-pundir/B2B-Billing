@@ -513,6 +513,21 @@ async def import_rules(file: UploadFile = File(...), lock: bool = False, replace
     return res
 
 
+@router.post("/import/mapping/suggest")
+async def suggest_mapping(file: UploadFile = File(...), db: Session = Depends(get_db), user: User = Depends(require_write("commercials"))):
+    """Upload an export of the platform's customer list (enterprise ID + name, optionally GSTIN) and get back a mapping CSV with
+    the confident matches filled in and the close ones listed for review. Nothing is applied until that file is imported."""
+    from app.services import mapping_suggest
+    text = (await file.read()).decode("utf-8-sig", errors="replace")
+    try:
+        platform = mapping_suggest.read_platform_list(text)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    csv_text, counts = mapping_suggest.to_csv(mapping_suggest.suggest(db, platform))
+    log_action(db, user, "v2.mapping.suggest", "billing_account", str(counts))
+    return {"summary": {**counts, "platform_enterprises": len(platform)}, "csv": csv_text}
+
+
 @router.post("/import/rules/resolve")
 async def resolve_unmodelled(file: UploadFile = File(...), db: Session = Depends(get_db), user: User = Depends(require_write("commercials"))):
     """Upload the rulebook again to clear 'needs modelling' charges on accounts that are already imported. Creates draft versions only."""

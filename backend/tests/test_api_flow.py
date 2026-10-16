@@ -1,5 +1,7 @@
 """End-to-end API tests on synthetic data: roles, billing v2 import → run → approval → ledger → insights → renewals → Zoho."""
 import datetime
+import csv
+import io
 import json
 
 import pytest
@@ -383,7 +385,7 @@ def test_month_end_close_review_lock_and_background_push(fin, fin2, acc):
 def test_close_checklist_and_zoho_status(fin):
     c = fin.get("/api/close/checklist?period=2026-11").json()
     keys = {i["key"]: i for i in c["items"]}
-    assert {"feed", "usage", "mapping", "modelled", "drafts", "previous", "zoho"} <= set(keys)
+    assert {"feed", "usage", "mapping", "modelled", "fields", "drafts", "previous", "zoho"} <= set(keys)
     assert all(i["status"] in ("ok", "warn", "block") and i["detail"] for i in c["items"])
     assert keys["zoho"]["status"] == "warn"                                                        # no credentials in tests
     assert fin.post("/api/close/zoho/test").json()["configured"] is False
@@ -489,3 +491,78 @@ def test_reread_rulebook_to_clear_unmodelled_is_draft_only_and_repeatable(fin, a
     for d in first.json()["drafted"]:
         c = next(c for c in fin.get(f"/api/v2/accounts/{[a for a in fin.get('/api/v2/accounts').json() if a['name'] == d['name']][0]['id']}").json()["contracts"] if c["id"] == d["contract_id"])
         assert c["status"] == "draft"                                                     # never locks by itself
+
+
+def test_first_run_is_compared_with_the_legacy_figures_not_flagged_as_first_invoice(tmp_path):
+    """Cutover: with no invoices yet, the previous system's last taxable value is the comparison, so only real swings are flagged."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    import app.models  # noqa: F401
+    from app.database import Base
+    from app.models import BaselineAmount
+    from app.services import importer_v2, review
+    eng = create_engine(f"sqlite:///{tmp_path}/b.db")
+    Base.metadata.create_all(eng)
+    db = sessionmaker(bind=eng)()
+    row = lambda n, taxable: {"row": n, "customer": f"Cutover {n}", "status": "Active", "A_platform": {"type": "Fixed SaaS", "rule": "x", "base_P": 5000}, "B_upi": {"type": "None"},
+                              "C_users": {"type": "None"}, "D_module": {}, "sep26_actuals": {"Taxable": taxable}}
+    text = "\n".join(json.dumps(r) for r in [row(1, 5000.0), row(2, 0), row(3, "=#N/A")])
+    importer_v2.import_rules(db, text, "t", lock=True)
+    base = {b.client.name: (b.period, b.taxable) for b in db.query(BaselineAmount)}
+    assert base == {"Cutover 1": ("2026-09", 5000.0)}                          # zero and #N/A rows are not baselines
+    prev = review.previous_subtotals(db, "2026-10")
+    assert list(prev.values()) == [5000.0]
+    assert review.previous_subtotals(db, "2026-09") == {}                      # a baseline never compares with its own month
+
+
+def test_mapping_suggestions_fill_only_confident_matches_and_round_trip(tmp_path):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    import app.models  # noqa: F401
+    from app.database import Base
+    from app.models import BillingAccount
+    from app.services import importer_v2, mapping_suggest
+    eng = create_engine(f"sqlite:///{tmp_path}/m.db")
+    Base.metadata.create_all(eng)
+    db = sessionmaker(bind=eng)()
+    names = ["Alpha Foods Private Limited", "Beta Logistics Pvt. Ltd.", "Gamma Steel Industries", "Delta Textiles LLP", "Epsilon Retail", "Zeta Same Name Co"]
+    mk = lambda n, name: {"row": n, "customer": name, "status": "Active", "A_platform": {"type": "Fixed SaaS", "rule": "x", "base_P": 5000}, "B_upi": {"type": "None"}, "C_users": {"type": "None"}, "D_module": {}}
+    importer_v2.import_rules(db, "\n".join(json.dumps(mk(i + 1, n)) for i, n in enumerate(names)), "t", lock=True)
+    db.query(BillingAccount).filter(BillingAccount.display_name == "Gamma Steel Industries").one().client.gst = "24AAACG1234A1Z5"
+    db.commit()
+    platform = mapping_suggest.read_platform_list(
+        "EnterpriseId,Enterprise Name,GSTIN\n"
+        "E1,ALPHA FOODS PVT LTD,\n"                       # same name once suffixes are ignored
+        "E2A,beta logistics,\n"                           # two enterprises with one name: linked together
+        "E2B,Beta Logistics Limited,\n"
+        "E3,Gamma Steel (renamed),24AAACG1234A1Z5\n"      # matched on GSTIN despite the different name
+        "E4,Delta Textiles Holdings,\n"                   # close, not exact: suggested but not filled
+        "E5,Zeta Same Name Co,\n"
+        "E6,Zeta Same Name Co.,\n"                        # (two accounts below would both claim an ID: see conflict)
+        "E7,Unrelated Business,\n")
+    csv_text, counts = mapping_suggest.to_csv(mapping_suggest.suggest(db, platform))
+    rows = {r["customer"]: r for r in csv.DictReader(io.StringIO(csv_text))}
+    assert rows["Alpha Foods Private Limited"]["enterprise_id (use ; to add more)"] == "E1"
+    assert set(rows["Beta Logistics Pvt. Ltd."]["enterprise_id (use ; to add more)"].split(";")) == {"E2A", "E2B"}
+    assert rows["Gamma Steel Industries"]["enterprise_id (use ; to add more)"] == "E3" and rows["Gamma Steel Industries"]["match"] == "gstin"
+    assert rows["Delta Textiles LLP"]["enterprise_id (use ; to add more)"] == "" and "E4" in rows["Delta Textiles LLP"]["note"]
+    assert rows["Epsilon Retail"]["match"] == "" and "no match" in rows["Epsilon Retail"]["note"]
+    assert counts["auto"] >= 4 and counts["review"] >= 1 and counts["none"] >= 1
+    done = importer_v2.import_mapping(db, csv_text)                      # the file the assistant writes is exactly what the importer reads
+    assert done["mapped"] == counts["auto"] and not done["errors"]
+    with pytest.raises(ValueError, match="enterprise-ID column"):
+        mapping_suggest.read_platform_list("foo,bar\n1,2\n")
+
+
+def test_a_customer_without_a_state_is_withheld_instead_of_getting_a_guessed_gst_type(monkeypatch):
+    from types import SimpleNamespace
+    from app.config import get_settings
+    from app.routers.billing_routes import _v2_invoice_result
+    monkeypatch.setattr(get_settings(), "REQUIRE_CUSTOMER_STATE", True)
+    v2 = {"billable": True, "exceptions": [], "subtotal": 1000, "contract": SimpleNamespace(gst_rate=0.18, version=1), "lines": [], "usage": {}, "life": {"reason": ""}}
+    none = _v2_invoice_result(v2, SimpleNamespace(state_code="", gst_treatment="registered"), "09", 0)
+    assert none[0] is None and "CUSTOMER_STATE_MISSING" in none[1]
+    intra = _v2_invoice_result(v2, SimpleNamespace(state_code="09", gst_treatment="registered"), "09", 0)[0]
+    inter = _v2_invoice_result(v2, SimpleNamespace(state_code="27", gst_treatment="registered"), "09", 0)[0]
+    assert (intra["gst_type"], inter["gst_type"]) == ("CGST_SGST", "IGST") and intra["gst"] == inter["gst"] == 180.0
+    assert _v2_invoice_result(v2, SimpleNamespace(state_code="", gst_treatment="overseas"), "09", 0)[0] is not None   # exports have no Indian state

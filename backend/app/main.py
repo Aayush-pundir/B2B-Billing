@@ -8,7 +8,7 @@ from app.config import get_settings
 from app.database import Base, engine, SessionLocal
 from app.migrate import ensure_indexes, ensure_schema
 from app.models import Metric, Addon
-from app.routers import auth_routes, core_routes, agreement_routes, billing_routes, reconciliation_routes, crm_routes, datasource_routes, automation_routes, portal_routes, items_routes, sales_routes, purchases_routes, accounting_routes, accounts_v2_routes, insights_routes, overview_routes, close_routes
+from app.routers import auth_routes, core_routes, agreement_routes, billing_routes, reconciliation_routes, crm_routes, datasource_routes, automation_routes, portal_routes, items_routes, sales_routes, purchases_routes, accounting_routes, accounts_v2_routes, insights_routes, overview_routes, close_routes, zoho_routes
 
 settings = get_settings()
 
@@ -41,6 +41,7 @@ app.include_router(accounts_v2_routes.router)
 app.include_router(insights_routes.router)
 app.include_router(overview_routes.router)
 app.include_router(close_routes.router)
+app.include_router(zoho_routes.router)
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend"
 if FRONTEND_DIR.is_dir():

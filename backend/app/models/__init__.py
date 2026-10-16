@@ -707,3 +707,16 @@ class ReviewItem(Base):
     reviewed_by = Column(String, default="")
     reviewed_at = Column(DateTime, nullable=True)
     comment = Column(String, default="")
+
+
+class BaselineAmount(Base):
+    """What a customer was billed (taxable) before this system took over, so the first real month is compared with something
+    instead of flagging every invoice as 'first invoice'. Replaced by real invoices as soon as they exist."""
+    __tablename__ = "baseline_amounts"
+
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+    period = Column(String, nullable=False)
+    taxable = Column(Float, default=0.0)
+    source = Column(String, default="legacy sheet")
+    client = relationship("Client")

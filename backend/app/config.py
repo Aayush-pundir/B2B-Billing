@@ -56,6 +56,15 @@ class Settings:
         self.ZOHO_REFRESH_TOKEN = os.getenv("ZOHO_REFRESH_TOKEN", "")
         self.ZOHO_ORG_ID = os.getenv("ZOHO_ORG_ID", "")
         self.ZOHO_API_BASE = os.getenv("ZOHO_API_BASE", "https://www.zohoapis.in/books/v3")
+        # Zoho keeps each data centre on its own domain: .in (India, the default), .com, .eu, .com.au ...
+        self.ZOHO_ACCOUNTS_BASE = os.getenv("ZOHO_ACCOUNTS_BASE", "https://accounts.zoho.in")
+        # Tax names to look up in Zoho Books for each invoice ({rate} becomes 18, 5, 0 ...). Defaults match a standard India setup.
+        self.ZOHO_TAX_INTRA = os.getenv("ZOHO_TAX_INTRA", "GST{rate}")
+        self.ZOHO_TAX_INTER = os.getenv("ZOHO_TAX_INTER", "IGST{rate}")
+        # Without the customer's state the GST type (IGST or CGST+SGST) is a guess, and a wrong guess is a wrong tax invoice.
+        # So a customer with no state on file is withheld from the run. Turn off only for demos.
+        self.REQUIRE_CUSTOMER_STATE = os.getenv("REQUIRE_CUSTOMER_STATE", "1").lower() in ("1", "true", "yes")
+        self.ZOHO_PUSH_PAUSE_SECONDS = float(os.getenv("ZOHO_PUSH_PAUSE_SECONDS", "0.35"))
 
 
 def dev_login_allowed(settings: "Settings") -> bool:

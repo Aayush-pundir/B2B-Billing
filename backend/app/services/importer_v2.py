@@ -12,7 +12,7 @@ import re
 
 from sqlalchemy.orm import Session
 
-from app.models import (AccountEnterprise, AccountEvent, BillingAccount, BillingGroup, BillingGroupMember, Client, Contract,
+from app.models import (BaselineAmount, AccountEnterprise, AccountEvent, BillingAccount, BillingGroup, BillingGroupMember, Client, Contract,
                         ContractComponent, EscalationRule, SubscriptionInvoice)
 
 
@@ -262,6 +262,16 @@ def _users(r: dict) -> list[dict]:
 
 
 
+def _legacy_baseline(r: dict) -> tuple[str, float] | None:
+    """The previous system's last taxable value for this customer, from a '<mon><yy>_actuals' block (e.g. sep26_actuals)."""
+    months = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
+    for key, block in r.items():
+        m = re.fullmatch(r"([a-z]{3})(\d{2})_actuals", key)
+        if m and m.group(1) in months and isinstance(block, dict) and isinstance(block.get("Taxable"), (int, float)) and block["Taxable"] > 0:
+            return f"20{m.group(2)}-{months[m.group(1)]:02d}", float(block["Taxable"])
+    return None
+
+
 # ------------------------------------------------------------------ placeholders that can be resolved
 _NOT_BILLABLE_STATUS = ("dropped", "demo", "not billable")
 
@@ -482,6 +492,11 @@ def _import_rules_rows(db, lines, existing, by_row, user_email, lock, replace) -
         acct.import_flags = [*(r.get("flags") or []), *(r.get("sheet_notes") or [])]
         acct.notes = "\n".join(x for x in [str(r.get("contract_text") or ""), r.get("sheet_remarks") or ""] if x and x != "0")
         by_row[row] = acct
+        baseline = _legacy_baseline(r)
+        if baseline:
+            for old in db.query(BaselineAmount).filter(BaselineAmount.client_id == acct.client.id).all() if acct.client.id else []:
+                db.delete(old)
+            db.add(BaselineAmount(client=acct.client, period=baseline[0], taxable=baseline[1], source="legacy rulebook"))
 
         platform, tags = _platform(r)
         comps = [*platform, *_upi(r), *_users(r), *_module(r)]

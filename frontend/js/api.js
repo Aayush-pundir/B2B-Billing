@@ -159,6 +159,8 @@ const Apx = {
   v2form: (path, file, params = '') => { const fd = new FormData(); fd.append('file', file); return request('/api/v2' + path + params, { method: 'POST', body: fd, isForm: true }); },
   v2mappingTemplateUrl: () => `${API_BASE}/api/v2/import/mapping-template`,
 
+  zohoSyncCustomers: (dryRun) => request(`/api/zoho/sync-customers?dry_run=${dryRun}`, { method: 'POST' }),
+
   // month-end close
   closeApi: (path, opts) => request('/api/close' + path, opts),
 

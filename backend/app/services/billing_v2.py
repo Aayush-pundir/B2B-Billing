@@ -169,9 +169,25 @@ def compute_account(db: Session, account: BillingAccount, period: str, snaps: di
 
 def billable_accounts(db: Session, period: str) -> list[BillingAccount]:
     """Accounts that will actually be invoiced in the period (live, not paused or dropped, with a locked contract)."""
-    accounts = db.query(BillingAccount).options(selectinload(BillingAccount.enterprises), selectinload(BillingAccount.events),
+    accounts = db.query(BillingAccount).options(selectinload(BillingAccount.enterprises), selectinload(BillingAccount.events), selectinload(BillingAccount.client),
                                                 selectinload(BillingAccount.contracts).selectinload(Contract.components)).all()
     return [a for a in accounts if lifecycle(a, period)["billable"] and active_contract(a, period) is not None]
+
+
+# usage fields each charge reads; the three standard queries supply STANDARD_FIELDS, the rest need the optional 'extras' / 'spend' queries
+STANDARD_FIELDS = {"add_money", "upi_txn_count", "upi_txn_amount", "upi_cnt_le_2500", "upi_amt_gt_2500", "maker_count", "admin_count", "checker_count", "approver_count"}
+_NEEDS = {"load_percent": ["add_money"], "load_percent_tiered": ["add_money"], "load_percent_plus_fixed": ["add_money"], "upi_per_txn": ["upi_txn_count"],
+          "fixed_minus_upi_credit": ["upi_txn_count"], "upi_volume_slab": ["upi_txn_count"], "upi_amount_slab": ["upi_cnt_le_2500", "upi_amt_gt_2500"],
+          "spend_percent_after_free_txns": ["upi_spend_after_free"], "upi_conditional_pct": ["card_share_pct", "upi_txn_count"], "per_user": ["maker_count"], "per_admin": ["admin_count"]}
+
+
+def needed_usage_fields(components) -> set[str]:
+    out: set[str] = set()
+    for k in components:
+        out.update(_NEEDS.get(k.component_type, []))
+        if k.component_type == "per_unit_fleet":
+            out.add("driver_count" if (k.params or {}).get("unit") == "driver" else "truck_count")
+    return out
 
 
 def open_assumptions(contract: Contract | None) -> list[dict]:

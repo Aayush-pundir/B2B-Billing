@@ -7,32 +7,46 @@ import time
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.database import SessionLocal
 from app.models import BillingAccount, BillingRun, Client, Invoice
-from app.services import zoho
+from app.services import gst_states, settings_store, zoho, zoho_sync
 
 _running: dict[int, threading.Thread] = {}
 _lock = threading.Lock()
-PAUSE_SECONDS = 0.35  # stays well inside Zoho's per-minute API allowance
 
 
 def _pushable(run: BillingRun) -> list[Invoice]:
     return [i for i in run.invoices if i.status != "cancelled" and not i.zoho_invoice_id]
 
 
+GST_SLABS = (0.0, 0.25, 3.0, 5.0, 12.0, 18.0, 28.0)
+
+
+def _gst_slab(raw_percent: float) -> float:
+    """The GST rate an invoice was charged at, recovered from its rounded amounts: 17.99 means 18, never a tax called 'GST17.99'."""
+    return min(GST_SLABS, key=lambda r: abs(r - raw_percent))
+
+
 def push_one(db: Session, run: BillingRun, inv: Invoice) -> None:
-    """Create (or find) the customer, then the draft invoice. Raises on failure; the caller records the message."""
+    """Create (or find) the customer, then the draft invoice with GST on every line. Raises on failure; the caller records the message."""
     client = db.query(Client).get(inv.client_id)
     account = db.query(BillingAccount).filter(BillingAccount.client_id == client.id).first()
+    state_map = zoho_sync.learned_state_map(db)
+    short = gst_states.short_code(client.state_code, state_map)
     if not client.zoho_contact_id:
         name = account.zoho_billing_name if account and account.zoho_billing_name else client.name
-        client.zoho_contact_id = zoho.create_contact(name, client.gst)["contact_id"]
+        address = {"address": client.address_line1, "street2": client.address_line2, "city": client.city, "state": client.state, "zip": client.pincode, "country": client.country}
+        client.zoho_contact_id = zoho.create_contact(name, client.gst, state_short=short, email=client.billing_contact_email, address=address)["contact_id"]
     notes = f"Platform Fee {run.period}"
     if account is not None and not account.auto_debit:
         notes += " — DO NOT AUTO DEBIT: collect manually."
     if any(l.get("component_type") for l in inv.lines or []):  # v2: one Zoho line per charge
         lines = [{"label": l["label"], "detail": l.get("calc_detail") or l.get("detail", ""), "amount": l["amount"]} for l in inv.lines if l.get("amount")]
-        result = zoho.push_invoice_lines(client.zoho_contact_id, inv.invoice_no, (inv.issued_at or inv.created_at).date().isoformat(), inv.due_date, lines, notes)
+        rate = _gst_slab(inv.gst / inv.subtotal * 100) if inv.subtotal else 18.0
+        result = zoho.push_invoice_lines(client.zoho_contact_id, inv.invoice_no, (inv.issued_at or inv.created_at).date().isoformat(), inv.due_date, lines, notes,
+                                         gst_type="IGST" if inv.gst_type == "IGST" else "CGST_SGST", gst_rate=rate, place_of_supply=short, gstin=client.gst,
+                                         sac=settings_store.get_all_settings(db).get("DEFAULT_SAC") or "998314")
     else:
         breakdown = [f"{l['label']}: ₹{l['amount']:,.2f} ({l['calc_detail']})" for l in inv.lines]
         result = zoho.push_draft_invoice(client.zoho_contact_id, f"Invoice for the month of {run.period}", inv.total,
@@ -55,7 +69,7 @@ def _work(run_id: int) -> None:
                 inv.zoho_error = str(exc)[:300]
             db.commit()
             if live:
-                time.sleep(PAUSE_SECONDS)
+                time.sleep(get_settings().ZOHO_PUSH_PAUSE_SECONDS)  # stays well inside Zoho's per-minute API allowance
         run = db.query(BillingRun).get(run_id)
         if not _pushable(run) and run.status == "approved":
             run.status = "pushed"

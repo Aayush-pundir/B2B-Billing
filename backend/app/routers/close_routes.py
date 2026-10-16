@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, selectinload
 
+from app.config import get_settings
 from app.database import get_db
 from app.models import BillingAccount, BillingRun, Client, Contract, Invoice, ReviewItem, UsageSnapshot, User
 from app.routers.core_routes import log_action
@@ -46,8 +47,23 @@ def checklist(period: str, db: Session = Depends(get_db), user: User = Depends(r
         f"{covered} of {len(mapped_ids)} mapped enterprises have usage rows." + (" Calculate fetches the rest from the database." if usage_db.is_configured() and covered < len(mapped_ids) else ""), "accounts")
     add("mapping", "Every billable account is mapped to a platform enterprise", "ok" if not unmapped else "block",
         "All mapped." if not unmapped else f"{len(unmapped)} billable account(s) have no enterprise ID yet and will be withheld: " + ", ".join(a.display_name for a in unmapped[:4]) + ("…" if len(unmapped) > 4 else ""), "accounts")
+    no_state = [a for a in billable if not (a.client.state_code or "").strip() and (a.client.gst_treatment or "") != "overseas"]
+    add("master", "Every customer has its GST state on file", "ok" if not no_state else ("block" if get_settings().REQUIRE_CUSTOMER_STATE else "warn"),
+        "All billable customers have a state." if not no_state else
+        f"{len(no_state)} billable customer(s) have no state, so their GST type cannot be decided and they are withheld: " + ", ".join(a.display_name for a in no_state[:4]) + ("…" if len(no_state) > 4 else "") + ". Use Customers → Pull from Zoho, or import the customer master.", "clients")
     add("modelled", "Every charge is modelled", "ok" if not unmodelled else "warn",
         "All commercial terms are modelled." if not unmodelled else f"{unmodelled} charge(s) are still free-text and would bill ₹0 until someone models them.", "accounts")
+    need: dict[str, int] = {}
+    for a in billable:
+        for f in billing_v2.needed_usage_fields(billing_v2.active_contract(a, period).components):
+            need[f] = need.get(f, 0) + 1
+    extra = {f: n for f, n in need.items() if f not in billing_v2.STANDARD_FIELDS}
+    queries = usage_db.get_queries(db)
+    gaps = {f: n for f, n in extra.items() if not queries["spend" if f == "upi_spend_after_free" else "extras"].strip()}
+    add("fields", "Usage query supplies every field the contracts read", "ok" if not gaps else "warn",
+        "Every field is covered by the configured queries." if not gaps else
+        "Charges that read a field no query supplies bill ₹0 and are flagged: " + ", ".join(f"{f} ({n} accounts)" for f, n in sorted(gaps.items()))
+        + ". Add an 'extras' query (truck_count, driver_count, card_share_pct) and, for spend-based contracts, a 'spend' query on the Settings page.", "settings")
     pending_assumptions = sum(len(billing_v2.open_assumptions(billing_v2.active_contract(a, period))) for a in billable)
     add("assumptions", "Interpreted contract terms are confirmed", "ok" if not pending_assumptions else "warn",
         "Nothing is waiting for confirmation." if not pending_assumptions else f"{pending_assumptions} interpreted term(s) are unconfirmed. They are billed as read and flagged on each invoice until Finance confirms them.", "accounts")

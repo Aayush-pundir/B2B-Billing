@@ -344,6 +344,8 @@ function v2ImportTab(panel) {
         <button id="im-rules-go" ${can ? '' : 'disabled'}>Import rulebook</button></div>
       <div class="card"><h3><i class="fa-solid fa-link"></i> 2 · Enterprise-ID mapping (CSV)</h3><p class="muted">Imported accounts start with placeholder IDs and are withheld from billing until mapped. Download the template, fill in the platform <code>enterprise_id</code> (use <code>;</code> for clubbed enterprises), upload it.</p>
         <div class="actions-row"><a class="btn ghost" href="${Apx.v2mappingTemplateUrl()}"><i class="fa-solid fa-download"></i> Template</a><input type="file" id="im-map" accept=".csv" /></div><button id="im-map-go" ${can ? '' : 'disabled'}>Import mapping</button></div>
+      <div class="card"><h3><i class="fa-solid fa-wand-magic-sparkles"></i> Suggest the enterprise IDs</h3><p class="muted">Export the platform's customer list (enterprise ID and name, GSTIN if you have it) and upload it here. Confident matches are filled into a mapping file for you to review; close matches are listed beside it, not filled in. Then import that file in step 2.</p>
+        <input type="file" id="im-suggest" accept=".csv" /><div style="margin-top:.6rem"><button id="im-suggest-go" ${can ? '' : 'disabled'}>Suggest mapping</button></div></div>
       <div class="card"><h3><i class="fa-solid fa-calendar-check"></i> 3 · Periodic register (CSV)</h3><p class="muted">Annual / quarterly subscription invoices. They stop the monthly run from billing the platform fee for a covered month.</p>
         <input type="file" id="im-reg" accept=".csv" /><div style="margin-top:.6rem"><button id="im-reg-go" ${can ? '' : 'disabled'}>Import register</button></div></div>
       <div class="card"><h3><i class="fa-solid fa-wand-magic-sparkles"></i> Clear 'needs modelling' charges</h3><p class="muted">Already imported your rulebook? Upload it again here. Accounts that still have an unmodelled charge get a corrected <b>draft</b> version where the wording can now be read; anything interpreted is listed for Finance to confirm. Locked versions are never touched and dropped accounts are skipped.</p>
@@ -356,6 +358,19 @@ function v2ImportTab(panel) {
     const f = document.getElementById(input).files[0]; if (!f) return toast('Choose a file first', true);
     try { show(title, await Apx.v2form(path, f, typeof params === 'function' ? params() : params)); toast(`${title} complete`); } catch (e) { toast(e.message, true); } });
   upload('im-rules-go', 'im-rules', '/import/rules', () => `?lock=${panel.querySelector('#im-lock').checked}&replace=${panel.querySelector('#im-replace').checked}`, 'Rulebook import');
+  document.getElementById('im-suggest-go').addEventListener('click', async () => {
+    const f = document.getElementById('im-suggest').files[0]; if (!f) return toast('Choose the platform customer list first', true);
+    try {
+      const r = await Apx.v2form('/import/mapping/suggest', f), c = r.summary;
+      const url = URL.createObjectURL(new Blob(['\ufeff' + r.csv], { type: 'text/csv' }));
+      panel.querySelector('#im-out').innerHTML = `<div class="card"><h4>Mapping suggestions</h4>
+        <div class="stat-grid mini"><div class="stat-card"><div class="value">${c.auto}</div><div class="label">Filled in (confident)</div></div><div class="stat-card"><div class="value">${c.review}</div><div class="label">Close, to review</div></div>
+        <div class="stat-card"><div class="value">${c.none}</div><div class="label">No match</div></div><div class="stat-card"><div class="value">${c.already_mapped}</div><div class="label">Already mapped</div></div></div>
+        <p class="muted">${c.conflicts ? c.conflicts + ' account(s) matched an enterprise that another account also matched; decide which owns it. ' : ''}Open the file, check the ones marked close, fill in the rest, and import it in step 2.</p>
+        <a class="btn" href="${url}" download="mapping-suggestions.csv"><i class="fa-solid fa-download"></i> Download mapping file</a></div>`;
+      toast('Suggestions ready');
+    } catch (e) { toast(e.message, true); }
+  });
   upload('im-resolve-go', 'im-resolve', '/import/rules/resolve', '', 'Re-read of unmodelled charges');
   upload('im-map-go', 'im-map', '/import/mapping', '', 'Mapping import');
   upload('im-reg-go', 'im-reg', '/import/register', '', 'Register import');

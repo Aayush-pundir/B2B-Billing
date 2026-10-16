@@ -14,6 +14,22 @@ payment match below full confidence lands in a human review queue.
 Built entirely offline — no external AI API cost. All extraction, billing
 calculation, reconciliation, and reporting runs locally.
 
+## Before the first real run
+
+Do these in order. **Month close → Check inputs** shows where you stand.
+
+1. **Customer master.** *Customers → Pull from Zoho* links each account to its existing Zoho customer and fills GSTIN, PAN, state and e-mail. A customer with no state is withheld, because without it the GST type (IGST or CGST+SGST) would be a guess. Customers that do not exist in Zoho yet need their state filled in (import or edit) and are created in Zoho on the first push.
+2. **Enterprise IDs.** Export the platform's customer list and use *Billing accounts → Import & mapping → Suggest the enterprise IDs*. Confident matches (GSTIN, or the same name ignoring Pvt/Ltd) are filled in; close matches are listed for you to check. Import the reviewed file in step 2 of that page.
+3. **Usage database.** Set `USAGE_DATABASE_URL` (read-only) and adapt the SQL on the Settings page. Charges that read truck or driver counts, card share or spend need the optional *extras* / *spend* queries; the checklist tells you which fields your contracts read.
+4. **Zoho.** Set the four `ZOHO_*` credentials (and `ZOHO_ACCOUNTS_BASE` if your Zoho is not on the `.in` data centre), press *Test connection*. Invoices go to Zoho as drafts with GST18/IGST18 (looked up by name; override with `ZOHO_TAX_INTRA` / `ZOHO_TAX_INTER`), place of supply, GSTIN and SAC. Zoho keeps its own invoice numbering and e-invoicing; our number goes in the reference field.
+5. **First month.** The previous system's last figure per customer (from the rulebook's `sep26_actuals`) is the comparison, so only real swings are flagged for review.
+
+### Rehearse it without any outside service
+
+`tests/e2e_real_scale.py` runs the whole path through the API on your own files, using a stand-in platform database and a stand-in Zoho that enforces the same GST rules: import, mapping assistant, calculate, review, lock, customer pull, push, a second push (no duplicates) and the next month. It takes about 15 seconds for 800 accounts.
+
+    BILLING_RULES_JSONL=... BILLING_REGISTER_CSV=... python tests/e2e_real_scale.py
+
 ## Month-end close
 
 **Month close** (under Billing) is the monthly job as one guided flow:
