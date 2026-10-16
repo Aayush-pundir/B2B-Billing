@@ -387,3 +387,20 @@ def test_close_checklist_and_zoho_status(fin):
     assert all(i["status"] in ("ok", "warn", "block") and i["detail"] for i in c["items"])
     assert keys["zoho"]["status"] == "warn"                                                        # no credentials in tests
     assert fin.post("/api/close/zoho/test").json()["configured"] is False
+
+
+def test_dashboard_close_status_kpis_and_attention(fin):
+    d = fin.get("/api/dashboard").json()
+    assert len(d["period"]) == 7 and d["close"]["step"] in ("calc", "review", "lock", "zoho", "done")
+    assert len(d["trend"]) == 6 and d["trend"][-1]["period"] == d["period"]
+    k = d["kpis"]
+    assert k["billed"] >= 0 and k["outstanding"] >= k["overdue"] >= 0 and k["accounts"] >= 5
+    assert all({"level", "text", "page", "cta"} <= set(a) for a in d["attention"])
+
+
+def test_account_list_has_terms_last_billed_and_draft_flags(fin):
+    rows = {r["name"]: r for r in fin.get("/api/v2/accounts").json()}
+    beta = rows["Beta Load Co"]
+    assert {"load_percent", "upi_per_txn", "per_user", "per_admin"} <= set(beta["kinds"])
+    assert beta["last_billed"]["amount"] == 4000.0 and beta["last_billed"]["period"] >= "2026-09"
+    assert all("draft_pending" in r for r in rows.values())

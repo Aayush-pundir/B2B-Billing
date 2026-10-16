@@ -1,11 +1,29 @@
 """Lightweight endpoints that keep the UI fast: dashboard totals and global quick-search."""
+import datetime
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import BillingAccount, BillingRun, Client, Commercial, Invoice, User, Vendor
+from app.models import (AccountEnterprise, BillingAccount, BillingException, BillingRun, Client, Commercial, Contract, ContractComponent,
+                        Invoice, ReviewItem, User, Vendor)
+from app.services import review
 from app.services.auth import require_user
+
+OPEN = ("issued", "sent", "partially_paid", "overdue", "disputed", "pushed")
+
+
+def _prev_period(period: str) -> str:
+    y, m = int(period[:4]), int(period[5:7])
+    return f"{y - 1}-12" if m == 1 else f"{y}-{m - 1:02d}"
+
+
+def _periods_back(period: str, n: int) -> list[str]:
+    out = [period]
+    for _ in range(n - 1):
+        out.append(_prev_period(out[-1]))
+    return out[::-1]
 
 router = APIRouter(prefix="/api")
 
@@ -16,7 +34,14 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(require_user))
     inv_count, revenue = db.query(func.count(Invoice.id), func.coalesce(func.sum(Invoice.total), 0.0)).one()
     counts = dict(db.query(Invoice.run_id, func.count(Invoice.id)).group_by(Invoice.run_id).all())
     runs = db.query(BillingRun).order_by(BillingRun.id.desc())
+    today = datetime.date.today()
+    period = _prev_period(today.strftime("%Y-%m"))  # the month being closed
     return {
+        "period": period,
+        "close": _close_status(db, period),
+        "kpis": _kpis(db, period, today),
+        "trend": _trend(db, period),
+        "attention": _attention(db, period, today),
         "clients": db.query(func.count(Client.id)).scalar(),
         "locked_commercials": db.query(func.count(Commercial.id)).filter(Commercial.status == "locked").scalar(),
         "runs": runs.count(),
@@ -25,6 +50,84 @@ def dashboard(db: Session = Depends(get_db), user: User = Depends(require_user))
         "recent_runs": [{"id": r.id, "period": r.period, "status": r.status, "created_at": r.created_at.isoformat(),
                          "invoice_count": counts.get(r.id, 0)} for r in runs.limit(8).all()],
     }
+
+
+def _close_status(db: Session, period: str) -> dict:
+    run = db.query(BillingRun).filter(BillingRun.period == period, BillingRun.status != "rejected").order_by(BillingRun.id.desc()).first()
+    if not run:
+        return {"period": period, "run": None, "step": "calc", "review": None, "zoho": None}
+    rv = review.counts(db, run.id)
+    z = None
+    if run.status in ("approved", "pushed"):
+        live = [i for i in run.invoices if i.status != "cancelled"]
+        z = {"pushed": sum(1 for i in live if i.zoho_invoice_id), "total": len(live)}
+    if run.status == "pending_approval":
+        step = "review" if rv["open"] else "lock"
+    elif z and z["total"] and z["pushed"] == z["total"]:
+        step = "done"
+    else:
+        step = "zoho"
+    return {"period": period, "run": {"id": run.id, "status": run.status}, "step": step, "review": rv, "zoho": z,
+            "invoices": len(run.invoices), "total": (run.summary or {}).get("total", 0), "withheld": len((run.summary or {}).get("skipped", []))}
+
+
+def _taxable(db: Session, period: str) -> float:
+    return float(db.query(func.coalesce(func.sum(Invoice.subtotal), 0.0)).filter(Invoice.period == period, Invoice.status.notin_(("draft", "cancelled"))).scalar() or 0.0)
+
+
+def _trend(db: Session, period: str) -> list[dict]:
+    rows = dict(db.query(Invoice.period, func.sum(Invoice.subtotal)).filter(Invoice.status.notin_(("draft", "cancelled")))
+                .group_by(Invoice.period).all())
+    return [{"period": p, "taxable": round(float(rows.get(p) or 0), 2)} for p in _periods_back(period, 6)]
+
+
+def _overdue_query(db: Session, today: datetime.date):
+    """Open, undisputed invoices past their due date (disputes pause the aging clock)."""
+    return db.query(Invoice).filter(Invoice.status.in_(OPEN), or_(Invoice.disputed.is_(False), Invoice.disputed.is_(None)),
+                                    Invoice.due_date < today.isoformat(), Invoice.balance_due > 0)
+
+
+def _kpis(db: Session, period: str, today: datetime.date) -> dict:
+    billed, before = _taxable(db, period), _taxable(db, _prev_period(period))
+    outstanding = db.query(func.coalesce(func.sum(Invoice.balance_due), 0.0)).filter(Invoice.status.in_(OPEN)).scalar()
+    od = _overdue_query(db, today).with_entities(Invoice.balance_due).all()
+    return {"billed": round(billed, 2), "prev_billed": round(before, 2),
+            "change_pct": round((billed - before) / before * 100, 1) if before else None,
+            "outstanding": round(float(outstanding or 0), 2), "overdue": round(sum(x[0] or 0 for x in od), 2), "overdue_count": len(od),
+            "accounts": db.query(func.count(BillingAccount.id)).scalar()}
+
+
+def _attention(db: Session, period: str, today: datetime.date) -> list[dict]:
+    out: list[dict] = []
+    close = _close_status(db, period)
+    if close["run"] is None:
+        out.append({"level": "warn", "text": f"{period} has not been calculated yet", "page": "close", "cta": "Start the close"})
+    elif close["step"] == "review":
+        out.append({"level": "warn", "text": f"{close['review']['open']} invoice(s) in {period} wait for a second check", "page": "close", "cta": "Review"})
+    elif close["step"] == "lock":
+        out.append({"level": "warn", "text": f"{period} is reviewed and ready to lock", "page": "close", "cta": "Lock"})
+    elif close["step"] == "zoho":
+        out.append({"level": "warn", "text": f"{period} is locked but not yet in Zoho", "page": "close", "cta": "Push"})
+    if close["withheld"] if close["run"] else 0:
+        out.append({"level": "high", "text": f"{close['withheld']} account(s) were withheld from {period} and need fixing", "page": "close", "cta": "See why"})
+    high = db.query(func.count(BillingException.id)).filter(BillingException.status == "open", BillingException.severity == "high").scalar()
+    if high:
+        out.append({"level": "high", "text": f"{high} high-severity billing finding(s) are open", "page": "accounts", "cta": "Open"})
+    unmapped = db.query(func.count(func.distinct(AccountEnterprise.account_id))).filter(
+        or_(AccountEnterprise.enterprise_id.like("ROW-%"), AccountEnterprise.enterprise_id.like("UNMAPPED%"))).scalar()
+    if unmapped:
+        out.append({"level": "warn", "text": f"{unmapped} account(s) have no platform enterprise ID yet", "page": "accounts", "cta": "Map"})
+    unmodelled = db.query(func.count(ContractComponent.id)).join(Contract, Contract.id == ContractComponent.contract_id).filter(
+        ContractComponent.component_type == "manual_formula", Contract.status == "locked").scalar()
+    if unmodelled:
+        out.append({"level": "warn", "text": f"{unmodelled} charge(s) are free text and bill ₹0 until modelled", "page": "accounts", "cta": "Model"})
+    drafts = db.query(func.count(Contract.id)).filter(Contract.status == "draft").scalar()
+    if drafts:
+        out.append({"level": "info", "text": f"{drafts} contract draft(s) wait for Finance to lock", "page": "accounts", "cta": "Open"})
+    od = _overdue_query(db, today).with_entities(func.count(Invoice.id), func.coalesce(func.sum(Invoice.balance_due), 0.0)).one()
+    if od[0]:
+        out.append({"level": "warn", "text": f"{od[0]} invoice(s) are overdue (₹{od[1]:,.0f})", "page": "receivables", "cta": "Chase"})
+    return out
 
 
 @router.get("/search")

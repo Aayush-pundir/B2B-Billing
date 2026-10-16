@@ -5,6 +5,48 @@
 
 const v2Money = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const sevBadge = { high: 'error', medium: 'draft', low: 'none', info: 'none' };
+
+// Plain-English reading of a contract, so Finance can check terms without decoding raw fields.
+const V2_KIND_CHIP = { fixed_saas: 'Fixed', fixed_amount: 'Fixed', fixed_saas_gst_inclusive: 'Fixed', fixed_minus_upi_credit: 'Fixed', per_unit_fleet: 'Fleet', bbps_fee: 'BBPS', waived: 'Waived',
+  load_percent: '% load', load_percent_tiered: '% slabs', load_percent_plus_fixed: '% + fixed', upi_per_txn: 'UPI', upi_free: 'UPI free', upi_amount_slab: 'UPI slab', upi_volume_slab: 'UPI slab',
+  spend_percent_after_free_txns: 'UPI %', upi_conditional_pct: 'UPI %', per_user: 'Users', per_admin: 'Admins', module_package: 'Module', manual_formula: 'To model' };
+const v2Pct = (r) => `${+(Number(r) * 100).toFixed(4)}%`;
+const v2Rs = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+
+function v2Describe(c) {
+  const p = c.params || {};
+  switch (c.component_type) {
+    case 'fixed_saas': return `${v2Rs(p.base_amount)} a month${(p.escalations_applied || []).length ? ` (after ${p.escalations_applied.map(x => `×${x}`).join(' ')} escalation)` : ''}`;
+    case 'fixed_amount': case 'bbps_fee': return `${v2Rs(p.amount)} a month`;
+    case 'fixed_saas_gst_inclusive': return `${v2Rs(p.gross_amount)} a month including GST`;
+    case 'load_percent': return `${v2Pct(p.rate)} of Add Money${p.min_amount ? `, at least ${v2Rs(p.min_amount)}` : ''}`;
+    case 'load_percent_tiered': return `${p.mode === 'marginal' ? 'Band-wise' : 'Whole-amount'} slabs on Add Money: ${(p.tiers || []).map(t => `${t.upto ? 'up to ' + v2Rs(t.upto) : 'above'} at ${v2Pct(t.rate)}`).join(', ')}`;
+    case 'load_percent_plus_fixed': return `${v2Pct(p.rate)} of Add Money plus ${v2Rs(p.fixed)}`;
+    case 'fixed_minus_upi_credit': return `${v2Rs(p.base)} less ${v2Rs(p.credit_per_upi_txn)} credit per UPI transaction`;
+    case 'per_unit_fleet': return `${v2Rs(p.base)} including ${p.included_units || 0} ${p.unit || 'unit'}s, then ${v2Rs(p.rate_per_extra_unit)} per extra ${p.unit || 'unit'}`;
+    case 'waived': return `Waived${p.reason ? ' — ' + p.reason : ''}`;
+    case 'upi_per_txn': return `${v2Rs(p.rate)} per UPI transaction${p.free_txns ? `, first ${p.free_txns} free` : ''}`;
+    case 'upi_free': return 'UPI transactions are free';
+    case 'upi_amount_slab': return `${v2Rs(p.flat_per_txn_upto)} per transaction up to ${v2Rs(p.threshold)}, ${v2Pct(p.pct_above)} above`;
+    case 'spend_percent_after_free_txns': return `${v2Pct(p.pct)} of UPI spend after the first ${p.free_txns || 0} transactions`;
+    case 'upi_conditional_pct': return `${v2Pct(p.pct)} of UPI spend when card share is under ${p.card_share_threshold}%${p.min_per_txn ? `, at least ${v2Rs(p.min_per_txn)} a transaction` : ''}`;
+    case 'per_user': return `${v2Rs(p.rate)} per maker${p.min_users ? `, minimum ${p.min_users}` : ''}${p.free_users ? `, first ${p.free_users} free` : ''}`;
+    case 'per_admin': return `${v2Rs(p.rate)} per admin / co-admin${p.free_admins ? `, first ${p.free_admins} free` : ''}`;
+    case 'module_package': return `${p.units || 1} × ${v2Rs(p.price)}`;
+    case 'upi_volume_slab': return `UPI volume slabs (${(p.slabs || []).length} bands, ${p.mode || 'whole'})`;
+    case 'manual_formula': return `Not modelled yet — ${p.rule || 'needs a person to read the contract'}`;
+    default: return JSON.stringify(p);
+  }
+}
+
+function v2TermsPanel(contract, accountName) {
+  if (!contract) return '<div class="card"><p class="muted">No contract yet.</p></div>';
+  const rows = (contract.components || []).map(c => `<li class="${c.component_type === 'manual_formula' ? 'bad' : ''}"><span class="k">${esc(V2_KIND_CHIP[c.component_type] || c.component_type)}</span><span title="${esc(c.label || '')}">${esc(v2Describe(c))}</span></li>`);
+  if (contract.overall_min_amount) rows.push(`<li><span class="k">Minimum</span><span>${v2Rs(contract.overall_min_amount)} a month${contract.mg_effective_from ? ` from ${esc(contract.mg_effective_from)}` : ''}${contract.prorate_mg ? ', pro-rated in a part month' : ''}</span></li>`);
+  if (contract.overall_cap_amount) rows.push(`<li><span class="k">Cap</span><span>No more than ${v2Rs(contract.overall_cap_amount)} a month</span></li>`);
+  return `<div class="card terms"><div class="flex-between"><h3 style="margin:0">How ${esc(accountName)} is billed</h3><span class="muted">v${contract.version} · ${esc(contract.status)}</span></div><ul class="terms-list">${rows.join('') || '<li class="muted">No charges on this contract.</li>'}</ul></div>`;
+}
+
 let V2CAT = null;
 const v2cat = async () => V2CAT || (V2CAT = await Apx.v2('/catalogue'));
 
@@ -21,27 +63,66 @@ async function renderAccountsV2(content) {
 
 // ------------------------------- accounts list -------------------------------
 async function v2AccountsTab(panel) {
-  const q = state.v2Q || '', st = state.v2Filter || '';
-  const rows = await Apx.v2(`/accounts?q=${encodeURIComponent(q)}&status=${st}`);
-  const unmapped = rows.filter(r => !r.mapped).length, unmodelled = rows.reduce((s, r) => s + r.unmodelled, 0);
+  const f = state.v2List = Object.assign({ q: '', queue: 'all', kam: '', sort: 'name', page: 0 }, state.v2List || {});
+  if (state.v2Q) { f.q = state.v2Q; state.v2Q = ''; f.page = 0; }
+  const rows = await Apx.v2('/accounts');
+  const PER = 50;
+  const needs = (r) => !r.mapped || r.unmodelled > 0 || r.open_exceptions > 0 || r.draft_pending;
+  const queues = [
+    ['all', 'All', rows.length, null],
+    ['attention', 'Needs attention', rows.filter(r => r.billable && needs(r)).length, 'warn'],
+    ['unmapped', 'No enterprise ID', rows.filter(r => r.billable && !r.mapped).length, 'warn'],
+    ['unmodelled', 'To model', rows.filter(r => r.unmodelled > 0).length, 'warn'],
+    ['drafts', 'Draft contract', rows.filter(r => r.draft_pending).length, null],
+    ['billable', 'Billable', rows.filter(r => r.billable).length, null],
+    ['paused', 'Paused or dropped', rows.filter(r => !r.billable).length, null],
+  ];
+  const kams = [...new Set(rows.map(r => r.kam).filter(Boolean))].sort();
   panel.innerHTML = `
-    <div class="stat-grid"><div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-building-user"></i></div><div class="value">${rows.length}</div><div class="label">Billing accounts</div></div>
-      <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-link-slash"></i></div><div class="value">${unmapped}</div><div class="label">Awaiting enterprise-ID mapping</div></div>
-      <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-puzzle-piece"></i></div><div class="value">${unmodelled}</div><div class="label">Charges still to model</div></div></div>
-    <div class="card"><div class="actions-row"><input id="v2-q" placeholder="Search name or enterprise ID…" value="${esc(q)}" style="min-width:260px" />
-      <select id="v2-f"><option value="">All</option><option value="billable" ${st === 'billable' ? 'selected' : ''}>Billable</option><option value="nonbillable" ${st === 'nonbillable' ? 'selected' : ''}>Not billable</option></select></div>
-      ${tbl(['Account', 'Enterprise IDs', 'State', 'Contract', 'Charges', '>Minimum', 'Open issues', ''], rows.map(r => `<tr data-id="${r.id}">
-        <td><b>${esc(r.name)}</b><div class="muted" style="font-size:.74rem">${esc(r.kam || '')}</div></td>
-        <td class="mono" style="white-space:normal;max-width:200px">${r.mapped ? esc(r.enterprise_ids.join(', ')) : '<span class="badge draft">not mapped</span>'}</td>
+    <div class="queues">${queues.map(([id, label, n, tone]) => `<button class="queue ${f.queue === id ? 'on' : ''} ${n && tone ? tone : ''}" data-queue="${id}"><b>${n}</b><span>${label}</span></button>`).join('')}</div>
+    <div class="card">
+      <div class="actions-row"><input id="v2-q" placeholder="Search name or enterprise ID…" value="${esc(f.q)}" style="min-width:260px" />
+        <select id="v2-kam"><option value="">Any KAM</option>${kams.map(k => `<option ${f.kam === k ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select>
+        <select id="v2-sort"><option value="name" ${f.sort === 'name' ? 'selected' : ''}>Sort: name</option><option value="billed" ${f.sort === 'billed' ? 'selected' : ''}>Sort: last billed ↓</option><option value="issues" ${f.sort === 'issues' ? 'selected' : ''}>Sort: most issues</option></select>
+        <span class="muted" id="v2-count" style="margin-left:auto"></span>
+        <button class="ghost" id="v2-prev" aria-label="Previous page"><i class="fa-solid fa-chevron-left"></i></button><button class="ghost" id="v2-next" aria-label="Next page"><i class="fa-solid fa-chevron-right"></i></button></div>
+      <div id="v2-table"></div></div>`;
+
+  const view = () => {
+    const q = f.q.toLowerCase();
+    let list = rows.filter(r => (!q || (r.name + ' ' + r.enterprise_ids.join(' ')).toLowerCase().includes(q)) && (!f.kam || r.kam === f.kam) && ({
+      all: () => true, attention: () => r.billable && needs(r), unmapped: () => r.billable && !r.mapped, unmodelled: () => r.unmodelled > 0, drafts: () => r.draft_pending,
+      billable: () => r.billable, paused: () => !r.billable })[f.queue]());
+    const issues = (r) => (r.mapped ? 0 : 3) + r.unmodelled * 2 + r.open_exceptions + (r.draft_pending ? 1 : 0);
+    if (f.sort === 'billed') list = [...list].sort((x, y) => ((y.last_billed || {}).amount || -1) - ((x.last_billed || {}).amount || -1));
+    if (f.sort === 'issues') list = [...list].sort((x, y) => issues(y) - issues(x));
+    if (f.page * PER >= list.length) f.page = 0;
+    const shown = list.slice(f.page * PER, f.page * PER + PER);
+    panel.querySelector('#v2-count').textContent = list.length ? `${f.page * PER + 1}–${f.page * PER + shown.length} of ${list.length}` : '';
+    panel.querySelector('#v2-prev').disabled = f.page === 0;
+    panel.querySelector('#v2-next').disabled = (f.page + 1) * PER >= list.length;
+    panel.querySelector('#v2-table').innerHTML = tbl(['Account', 'State', 'Terms', '>Last billed', 'Needs', ''], shown.map(r => {
+      const kinds = [...new Set(r.kinds.map(k => V2_KIND_CHIP[k] || k))];
+      const flags = [!r.mapped && r.billable ? '<span class="rchip high">no enterprise ID</span>' : '', r.unmodelled ? `<span class="rchip medium">${r.unmodelled} to model</span>` : '',
+        r.open_exceptions ? `<span class="rchip medium">${r.open_exceptions} finding${r.open_exceptions > 1 ? 's' : ''}</span>` : '', r.draft_pending ? '<span class="rchip">draft contract</span>' : ''].join('');
+      return `<tr data-id="${r.id}" class="v2-row">
+        <td><b>${esc(r.name)}</b><div class="muted mono" style="font-size:.74rem">${r.mapped ? esc(r.enterprise_ids.join(', ')) : 'not mapped'}${r.kam ? ' · ' + esc(r.kam) : ''}</div></td>
         <td><span class="badge ${r.billable ? 'locked' : 'none'}">${esc(r.state)}</span></td>
-        <td>${r.contract_version ? `v${r.contract_version} <span class="badge ${r.contract_status === 'locked' ? 'locked' : 'draft'}">${esc(r.contract_status)}</span>` : `<span class="badge ${r.contract_status === 'draft' ? 'draft' : 'none'}">${esc(r.contract_status)}</span>`}</td>
-        <td>${r.components}${r.unmodelled ? ` <span class="badge error">${r.unmodelled} to model</span>` : ''}</td>
-        <td class="right amount">${r.overall_min ? v2Money(r.overall_min) : '—'}</td>
-        <td>${r.open_exceptions ? `<span class="badge draft">${r.open_exceptions}</span>` : '—'}</td>
-        <td><button class="ghost v2-open">Open</button></td></tr>`), 'No billing accounts yet — import your rulebook on the Import tab.')}</div>`;
-  let t; panel.querySelector('#v2-q').addEventListener('input', e => { clearTimeout(t); t = setTimeout(() => { state.v2Q = e.target.value; v2AccountsTab(panel); }, 300); });
-  panel.querySelector('#v2-f').addEventListener('change', e => { state.v2Filter = e.target.value; v2AccountsTab(panel); });
-  panel.querySelectorAll('.v2-open').forEach(b => b.addEventListener('click', e => { state.v2Account = Number(e.target.closest('tr').dataset.id); state.v2Sub = 'contract'; navigate('accounts'); }));
+        <td>${kinds.length ? kinds.map(k => `<span class="rchip ${k === 'To model' ? 'medium' : ''}">${esc(k)}</span>`).join(' ') : '<span class="muted" style="font-size:.78rem">no own charges</span>'}${r.overall_min ? ` <span class="rchip">min ${v2Rs(r.overall_min)}</span>` : ''}
+          <div class="muted" style="font-size:.74rem">${r.contract_version ? `v${r.contract_version} ${esc(r.contract_status)}` : esc(r.contract_status)}</div></td>
+        <td class="right amount">${r.last_billed ? v2Money(r.last_billed.amount) : '<span class="muted">—</span>'}${r.last_billed ? `<div class="muted" style="font-size:.74rem">${esc(r.last_billed.period)}</div>` : ''}</td>
+        <td>${flags || '<span class="muted">—</span>'}</td>
+        <td><button class="ghost v2-open">Open</button></td></tr>`;
+    }), 'No accounts match.');
+    panel.querySelectorAll('.v2-row').forEach(tr => tr.addEventListener('click', (e) => { if (e.target.closest('a')) return; state.v2Account = Number(tr.dataset.id); state.v2Sub = 'contract'; navigate('accounts'); }));
+  };
+  panel.querySelectorAll('.queue').forEach(b => b.addEventListener('click', () => { f.queue = b.dataset.queue; f.page = 0; panel.querySelectorAll('.queue').forEach(x => x.classList.toggle('on', x === b)); view(); }));
+  let t; panel.querySelector('#v2-q').addEventListener('input', e => { clearTimeout(t); t = setTimeout(() => { f.q = e.target.value; f.page = 0; view(); }, 200); });
+  panel.querySelector('#v2-kam').addEventListener('change', e => { f.kam = e.target.value; f.page = 0; view(); });
+  panel.querySelector('#v2-sort').addEventListener('change', e => { f.sort = e.target.value; f.page = 0; view(); });
+  panel.querySelector('#v2-prev').addEventListener('click', () => { f.page = Math.max(0, f.page - 1); view(); });
+  panel.querySelector('#v2-next').addEventListener('click', () => { f.page += 1; view(); });
+  view();
 }
 
 // ------------------------------- account detail -------------------------------
@@ -51,9 +132,12 @@ async function renderAccountDetail(content, id) {
   const tabs = [['contract', 'Contract', 'fa-file-contract'], ['enterprises', 'Enterprises', 'fa-link'], ['lifecycle', 'Lifecycle', 'fa-timeline'], ['subs', 'Subscriptions', 'fa-calendar-check'], ['esc', 'Escalation', 'fa-arrow-trend-up'], ['sim', 'Simulate', 'fa-flask']];
   content.innerHTML = `
     <div class="actions-row"><button class="ghost" id="v2-back"><i class="fa-solid fa-arrow-left"></i> All accounts</button></div>
-    <div class="card"><div class="flex-between"><div><h3 style="margin:0">${esc(a.name)}</h3><div class="muted">${esc(a.zoho_billing_name || '')}${a.kam ? ' · KAM ' + esc(a.kam) : ''}${a.go_live_date ? ' · live ' + esc(a.go_live_date) : ''}</div></div>
-      <div>${a.groups.map(g => `<span class="badge draft">${esc(g.group)}${g.is_parent ? ' (parent)' : ''}</span>`).join(' ')} ${a.auto_debit ? '' : '<span class="badge draft">no auto-debit</span>'}</div></div>
+    <div class="card acct-head"><div class="flex-between" style="align-items:flex-start;gap:1rem;flex-wrap:wrap"><div><h2 style="margin:0">${esc(a.name)}</h2>
+        <div class="muted">${esc(a.zoho_billing_name && a.zoho_billing_name !== a.name ? 'Zoho: ' + a.zoho_billing_name + ' · ' : '')}${a.kam ? 'KAM ' + esc(a.kam) + ' · ' : ''}${a.go_live_date ? 'live since ' + esc(a.go_live_date) : 'no go-live date'}</div></div>
+        <div class="chips">${a.groups.map(g => `<span class="badge draft">${esc(g.group)}${g.is_parent ? ' (parent)' : ''}</span>`).join(' ')} ${a.auto_debit ? '' : '<span class="badge draft">no auto-debit</span>'}
+          ${a.enterprises.map(e => `<span class="rchip mono" title="${esc(e.role)}">${esc(e.enterprise_id)}</span>`).join(' ')}</div></div>
       ${a.import_flags.length ? `<details class="fallback"><summary>${a.import_flags.length} note(s) carried over from the legacy sheet</summary>${a.import_flags.map(f => `<div class="muted" style="font-size:.8rem;margin-top:.3rem">• ${esc(f)}</div>`).join('')}</details>` : ''}</div>
+    ${v2TermsPanel(a.contracts.find(c => c.status === 'locked') || a.contracts[0], a.name)}
     ${tabBar(tabs, sub)}<div id="v2-sub"></div>`;
   document.getElementById('v2-back').onclick = () => { state.v2Account = null; navigate('accounts'); };
   content.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => { state.v2Sub = b.dataset.tab; renderAccountDetail(content, id); }));
@@ -66,10 +150,12 @@ async function renderAccountDetail(content, id) {
 function paramField(def, val) {
   const v = val ?? '';
   if (def.kind === 'json' || def.kind === 'list') return `<label>${esc(def.label)}<textarea data-p="${def.key}" data-kind="${def.kind}" rows="3" class="mono">${esc(typeof v === 'string' ? v : JSON.stringify(v, null, 0))}</textarea></label>`;
-  return `<label>${esc(def.label)}<input data-p="${def.key}" data-kind="${def.kind}" ${def.kind === 'number' ? 'type="number" step="any"' : ''} value="${esc(v)}" /></label>`;
+  const pct = def.kind === 'number' && /%/.test(def.label) && (def.key === 'rate' || def.key === 'pct' || def.key.endsWith('_pct'));
+  return `<label>${esc(def.label)}<input data-p="${def.key}" data-kind="${def.kind}" ${pct ? 'data-pct="1"' : ''} ${def.kind === 'number' ? 'type="number" step="any"' : ''} value="${esc(v)}" />${pct ? `<small class="hint">${v === '' ? '' : '= ' + v2Pct(v)}</small>` : ''}</label>`;
 }
 
 function v2Contract(el, a, cat, reload, call) {
+  el.addEventListener('input', (e) => { const i = e.target; if (i.dataset && i.dataset.pct) { const h = i.parentElement.querySelector('.hint'); if (h) h.textContent = i.value === '' ? '' : '= ' + v2Pct(i.value); } });
   const cs = a.contracts;
   if (!cs.length) { el.innerHTML = `<div class="card"><p class="muted">No contract yet.</p>${isFinance() ? '<button id="c-new">Create first version</button>' : ''}</div>`; document.getElementById('c-new')?.addEventListener('click', () => call(() => Apx.v2(`/accounts/${a.id}/contracts?copy_from_latest=false`, { method: 'POST' }), 'Draft created')); return; }
   const cur = cs.find(c => c.id === state.v2Contract) || cs.find(c => c.status === 'locked') || cs[0];

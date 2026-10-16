@@ -6,10 +6,10 @@ from decimal import Decimal as D
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
-from app.models import (AccountEnterprise, AccountEvent, BillingAccount, BillingException, BillingGroup, BillingGroupMember, Client,
+from app.models import (Invoice, AccountEnterprise, AccountEvent, BillingAccount, BillingException, BillingGroup, BillingGroupMember, Client,
                         Contract, ContractComponent, EscalationRule, SubscriptionInvoice, UsageSnapshot, User)
 from app.routers.core_routes import log_action
 from app.services import billing_v2, engine2, importer_v2, renewals, snapshots, usage_db
@@ -61,8 +61,15 @@ def list_accounts(q: str = "", status: str = "", db: Session = Depends(get_db), 
     open_ex = {}
     for e in db.query(BillingException).filter(BillingException.status == "open").all():
         open_ex[e.account_id] = open_ex.get(e.account_id, 0) + 1
+    last_billed: dict[int, dict] = {}
+    for inv_client, inv_period, inv_amount in (db.query(Invoice.client_id, Invoice.period, Invoice.subtotal)
+                                               .filter(Invoice.status.notin_(("draft", "cancelled")), Invoice.doc_type == "invoice").order_by(Invoice.period, Invoice.id)):
+        last_billed[inv_client] = {"period": inv_period, "amount": inv_amount}
     out = []
-    for a in db.query(BillingAccount).order_by(BillingAccount.display_name).all():
+    accounts = (db.query(BillingAccount).options(selectinload(BillingAccount.enterprises), selectinload(BillingAccount.events),
+                                                 selectinload(BillingAccount.contracts).selectinload(Contract.components))
+                .order_by(BillingAccount.display_name).all())
+    for a in accounts:
         if q and q.lower() not in (a.display_name + " ".join(e.enterprise_id for e in a.enterprises)).lower():
             continue
         life = billing_v2.lifecycle(a, today)
@@ -76,7 +83,9 @@ def list_accounts(q: str = "", status: str = "", db: Session = Depends(get_db), 
                     "state": state, "billable": life["billable"], "contract_version": c.version if c else None,
                     "contract_status": (c or latest).status if (c or latest) else "none", "components": len((c or latest).components) if (c or latest) else 0,
                     "unmodelled": sum(k.component_type == "manual_formula" for k in (c or latest).components) if (c or latest) else 0,
-                    "overall_min": c.overall_min_amount if c else None, "open_exceptions": open_ex.get(a.id, 0), "events": [e.event_type for e in a.events]})
+                    "overall_min": c.overall_min_amount if c else None, "open_exceptions": open_ex.get(a.id, 0), "events": [e.event_type for e in a.events],
+                    "kinds": [k.component_type for k in (c or latest).components] if (c or latest) else [], "last_billed": last_billed.get(a.client_id),
+                    "draft_pending": any(x.status == "draft" for x in a.contracts)})
     return out
 
 

@@ -202,12 +202,29 @@ async function loadBell() {
 // Dashboard
 // ---------------------------------------------------------------------------
 
+const compactRs = (n) => { n = Number(n || 0); const a = Math.abs(n);
+  return '₹' + (a >= 1e7 ? (n / 1e7).toFixed(2) + ' Cr' : a >= 1e5 ? (n / 1e5).toFixed(2) + ' L' : a >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : n.toFixed(0)); };
+const monthLabel = (p, long) => new Date(`${p}-01T00:00:00`).toLocaleString('en-IN', long ? { month: 'long', year: 'numeric' } : { month: 'short' });
+
+function billedChart(trend) {
+  const W = 420, H = 190, top = 26, bottom = 28, max = Math.max(...trend.map(t => t.taxable), 1), bw = 40, gap = (W - bw * trend.length) / (trend.length + 1);
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Billed per month" class="bars">
+    <line x1="0" x2="${W}" y1="${H - bottom}" y2="${H - bottom}" class="bc-axis" />
+    ${trend.map((t, i) => { const h = Math.max(t.taxable / max * (H - top - bottom), t.taxable ? 3 : 0), x = gap + i * (bw + gap), y = H - bottom - h, last = i === trend.length - 1;
+      return `<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="5" class="bc-bar ${last ? 'now' : ''}" />
+        <text x="${x + bw / 2}" y="${y - 7}" text-anchor="middle" class="bc-val ${last ? 'now' : ''}">${t.taxable ? compactRs(t.taxable) : '—'}</text>
+        <text x="${x + bw / 2}" y="${H - 9}" text-anchor="middle" class="bc-lbl">${monthLabel(t.period)}</text>`; }).join('')}</svg>`;
+}
+
 async function renderDashboard(content) {
   const [d, alerts] = await Promise.all([Apx.dashboard(), Apx.expiryAlerts()]);
-  const runs = d.recent_runs;
-  const clients = { length: d.clients }, runsCount = d.runs, invoices = { length: d.invoices };
-  const revenue = d.revenue;
-  const locked = d.locked_commercials;
+  const cl = d.close, k = d.kpis;
+  const steps = [['calc', 'Calculate'], ['review', 'Review'], ['lock', 'Lock'], ['zoho', 'Zoho']];
+  const at = cl.step === 'done' ? steps.length : steps.findIndex(x => x[0] === cl.step);
+  const headline = { calc: `${monthLabel(d.period, true)} has not been calculated`, review: `${cl.review && cl.review.open} invoice(s) wait for a second check`,
+    lock: 'Reviewed — ready to lock', zoho: `Locked — ${cl.zoho ? cl.zoho.total - cl.zoho.pushed : 0} invoice(s) still to push to Zoho`, done: `${monthLabel(d.period, true)} is closed and in Zoho` }[cl.step];
+  const cta = { calc: 'Start the close', review: 'Continue review', lock: 'Lock the month', zoho: 'Push to Zoho', done: 'View the month' }[cl.step];
+  const change = k.change_pct == null ? '' : `<span class="pill-delta ${k.change_pct >= 0 ? 'up' : 'down'}">${k.change_pct >= 0 ? '▲' : '▼'} ${Math.abs(k.change_pct)}%</span>`;
 
   let alertHtml = '';
   if (alerts.danger.length) alertHtml += `<div class="alert-bar danger"><i class="fa-solid fa-triangle-exclamation"></i> ${alerts.danger.length} agreement(s) expiring within 30 days</div>`;
@@ -215,30 +232,31 @@ async function renderDashboard(content) {
 
   content.innerHTML = `
     ${alertHtml}
-    <div class="stat-grid">
-      <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-building"></i></div><div class="value">${clients.length}</div><div class="label">Total Clients</div></div>
-      <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-lock"></i></div><div class="value">${locked}</div><div class="label">Locked Commercials</div></div>
-      <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-play"></i></div><div class="value">${runsCount}</div><div class="label">Billing Runs</div></div>
-      <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-receipt"></i></div><div class="value">${invoices.length}</div><div class="label">Invoices</div></div>
-      <div class="stat-card"><div class="stat-ico"><i class="fa-solid fa-indian-rupee-sign"></i></div><div class="value">${money(revenue)}</div><div class="label">Total Revenue</div></div>
+    <div class="card hero-close">
+      <div class="hero-text"><div class="eyebrow">Month close · ${esc(monthLabel(d.period, true))}</div><h2>${esc(headline)}</h2>
+        <ol class="mini-steps">${steps.map(([id, label], i) => `<li class="${i < at ? 'done' : i === at ? 'now' : ''}"><span></span>${label}</li>`).join('')}</ol>
+        ${cl.run ? `<div class="muted">${cl.invoices} invoices · ${money(cl.total)} taxable${cl.withheld ? ` · ${cl.withheld} withheld` : ''}</div>` : ''}</div>
+      <a class="btn" href="#close" onclick="state.close=Object.assign(state.close||{}, {period:'${d.period}'})">${cta} <i class="fa-solid fa-arrow-right"></i></a></div>
+
+    <div class="kpi-row">
+      <div class="kpi"><div class="kpi-label">Billed in ${esc(monthLabel(d.period))}</div><div class="kpi-value">${compactRs(k.billed)} ${change}</div><div class="kpi-sub">${k.prev_billed ? 'vs ' + compactRs(k.prev_billed) + ' the month before' : 'taxable value, before GST'}</div></div>
+      <div class="kpi"><div class="kpi-label">Outstanding</div><div class="kpi-value">${compactRs(k.outstanding)}</div><div class="kpi-sub">open invoices, incl. GST</div></div>
+      <div class="kpi ${k.overdue ? 'bad' : ''}"><div class="kpi-label">Overdue</div><div class="kpi-value">${compactRs(k.overdue)}</div><div class="kpi-sub">${k.overdue_count} invoice(s) past due</div></div>
+      <div class="kpi"><div class="kpi-label">Billing accounts</div><div class="kpi-value">${k.accounts}</div><div class="kpi-sub">${d.clients} customers on file</div></div>
     </div>
-    <div class="card">
-      <h3>Quick actions</h3>
-      <div class="quick-grid">
-        <a class="quick-tile" href="#clients"><span class="qi"><i class="fa-solid fa-plus"></i></span><div><b>Add client</b><span>Create or import accounts</span></div></a>
-        <a class="quick-tile" href="#agreements"><span class="qi"><i class="fa-solid fa-upload"></i></span><div><b>Upload agreement</b><span>Auto-extract terms</span></div></a>
-        <a class="quick-tile" href="#billing"><span class="qi"><i class="fa-solid fa-play"></i></span><div><b>Run monthly billing</b><span>Upload usage CSVs</span></div></a>
-        <a class="quick-tile" href="#reports"><span class="qi"><i class="fa-solid fa-download"></i></span><div><b>Export reports</b><span>Billing &amp; collections</span></div></a>
-      </div>
+
+    <div class="dash-grid">
+      <div class="card"><h3>Needs your attention</h3>
+        ${d.attention.length ? `<ul class="attn">${d.attention.map(a => `<li class="${a.level}"><i class="fa-solid ${a.level === 'high' ? 'fa-circle-exclamation' : a.level === 'info' ? 'fa-circle-info' : 'fa-triangle-exclamation'}"></i><span>${esc(a.text)}</span><a class="btn ghost" href="#${a.page}">${esc(a.cta)}</a></li>`).join('')}</ul>`
+          : '<p class="muted"><i class="fa-solid fa-circle-check" style="color:var(--ok)"></i> Nothing needs attention right now.</p>'}</div>
+      <div class="card"><h3>Billed per month <span class="muted" style="font-weight:400;font-size:.8rem">taxable, last 6 months</span></h3>${billedChart(d.trend)}</div>
     </div>
-    <div class="card">
-      <h3>Recent billing runs</h3>
+
+    <div class="card"><div class="flex-between"><h3 style="margin:0">Recent runs</h3><a href="#billing" class="muted">All runs</a></div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Period</th><th>Invoices</th><th>Status</th><th>Created</th></tr></thead>
-        <tbody>${runs.map(r => `<tr><td>${esc(r.period)}</td><td>${r.invoice_count}</td><td><span class="badge ${r.status}">${r.status}</span></td><td>${new Date(r.created_at).toLocaleString()}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No runs yet</td></tr>'}</tbody>
-      </table></div>
-    </div>
-  `;
+        <thead><tr><th>Period</th><th class="right">Invoices</th><th>Status</th><th>Created</th></tr></thead>
+        <tbody>${d.recent_runs.slice(0, 5).map(r => `<tr><td>${esc(r.period)}</td><td class="right">${r.invoice_count}</td><td><span class="badge ${r.status}">${esc(r.status.replace('_', ' '))}</span></td><td class="muted">${new Date(r.created_at).toLocaleString()}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No runs yet</td></tr>'}</tbody>
+      </table></div></div>`;
 }
 
 // ---------------------------------------------------------------------------
