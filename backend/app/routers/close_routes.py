@@ -26,9 +26,7 @@ def _run_for(db: Session, period: str) -> BillingRun | None:
 @router.get("/checklist")
 def checklist(period: str, db: Session = Depends(get_db), user: User = Depends(require_user)):
     """What must be true before pressing Calculate. status: ok | warn | block (block = those accounts will be withheld)."""
-    accounts = db.query(BillingAccount).options(selectinload(BillingAccount.enterprises), selectinload(BillingAccount.events),
-                                                selectinload(BillingAccount.contracts).selectinload(Contract.components)).all()
-    billable = [a for a in accounts if billing_v2.lifecycle(a, period)["billable"] and billing_v2.active_contract(a, period) is not None]
+    billable = billing_v2.billable_accounts(db, period)
     unmapped = [a for a in billable if any(e.enterprise_id.startswith(("ROW-", "UNMAPPED")) for e in a.enterprises)]
     mapped_ids = {e.enterprise_id for a in billable for e in a.enterprises if not e.enterprise_id.startswith(("ROW-", "UNMAPPED"))}
     seen = {s.enterprise_id for s in db.query(UsageSnapshot.enterprise_id).filter(UsageSnapshot.period == period)}
@@ -50,6 +48,9 @@ def checklist(period: str, db: Session = Depends(get_db), user: User = Depends(r
         "All mapped." if not unmapped else f"{len(unmapped)} billable account(s) have no enterprise ID yet and will be withheld: " + ", ".join(a.display_name for a in unmapped[:4]) + ("…" if len(unmapped) > 4 else ""), "accounts")
     add("modelled", "Every charge is modelled", "ok" if not unmodelled else "warn",
         "All commercial terms are modelled." if not unmodelled else f"{unmodelled} charge(s) are still free-text and would bill ₹0 until someone models them.", "accounts")
+    pending_assumptions = sum(len(billing_v2.open_assumptions(billing_v2.active_contract(a, period))) for a in billable)
+    add("assumptions", "Interpreted contract terms are confirmed", "ok" if not pending_assumptions else "warn",
+        "Nothing is waiting for confirmation." if not pending_assumptions else f"{pending_assumptions} interpreted term(s) are unconfirmed. They are billed as read and flagged on each invoice until Finance confirms them.", "accounts")
     add("drafts", "No contract changes waiting for Finance to lock", "ok" if not drafts else "warn",
         "Nothing pending." if not drafts else f"{drafts} draft contract version(s) are not locked — billing uses each account's last locked version.", "accounts")
     add("previous", f"{_prev(period)} is locked", "ok" if prev_run and prev_run.status in ("approved", "pushed") else "warn",

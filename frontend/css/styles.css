@@ -545,3 +545,9 @@ svg.bars .bc-axis { stroke: var(--border-strong); stroke-width: 1; }
 svg.bars .bc-bar { fill: var(--primary); opacity: .35; } svg.bars .bc-bar.now { opacity: 1; }
 svg.bars text { fill: var(--muted); font-size: 11px; font-family: inherit; }
 svg.bars text.bc-val { fill: var(--ink-2); font-weight: 600; } svg.bars text.bc-val.now { fill: var(--primary); }
+
+/* ---- interpreted-term assumptions ---- */
+.card.assume.open { border-color: var(--warn); background: var(--warn-soft); }
+.assume-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
+.assume-list li { display: flex; gap: 1rem; align-items: center; justify-content: space-between; padding: .6rem .8rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.assume-list li.ok { opacity: .75; }

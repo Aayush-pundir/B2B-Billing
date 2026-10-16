@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import (AccountEnterprise, BillingAccount, BillingException, BillingRun, Client, Commercial, Contract, ContractComponent,
                         Invoice, ReviewItem, User, Vendor)
-from app.services import review
+from app.services import billing_v2, review
 from app.services.auth import require_user
 
 OPEN = ("issued", "sent", "partially_paid", "overdue", "disputed", "pushed")
@@ -124,8 +124,11 @@ def _attention(db: Session, period: str, today: datetime.date) -> list[dict]:
         or_(AccountEnterprise.enterprise_id.like("ROW-%"), AccountEnterprise.enterprise_id.like("UNMAPPED%"))).scalar()
     if unmapped:
         out.append({"level": "warn", "text": f"{unmapped} account(s) have no platform enterprise ID yet", "page": "accounts", "cta": "Map"})
-    unmodelled = db.query(func.count(ContractComponent.id)).join(Contract, Contract.id == ContractComponent.contract_id).filter(
-        ContractComponent.component_type == "manual_formula", Contract.status == "locked").scalar()
+    billable = billing_v2.billable_accounts(db, period)  # dropped, paused and not-yet-live accounts cannot bill, so they are not "to model"
+    unmodelled = sum(1 for a in billable for k in (billing_v2.active_contract(a, period).components) if k.component_type == "manual_formula")
+    pending = sum(len(billing_v2.open_assumptions(billing_v2.active_contract(a, period))) for a in billable)
+    if pending:
+        out.append({"level": "info", "text": f"{pending} interpreted contract term(s) wait for Finance to confirm", "page": "accounts", "cta": "Confirm"})
     if unmodelled:
         out.append({"level": "warn", "text": f"{unmodelled} charge(s) are free text and bill ₹0 until modelled", "page": "accounts", "cta": "Model"})
     drafts = db.query(func.count(Contract.id)).filter(Contract.status == "draft").scalar()

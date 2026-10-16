@@ -151,6 +151,10 @@ def _platform(r: dict) -> tuple[list[dict], list[str]]:
         m = re.search(r"=\s*(\d+(?:\.\d+)?)\s*$", rule)
         if m:
             return [{"component_type": "fixed_amount", "label": "Platform fee", "params": {"amount": float(m.group(1))}}], notes
+        if base is None:
+            tiers = parse_slabs(str(r.get("contract_text") or "")) or (parse_slabs(A.get("rate_M")) if isinstance(A.get("rate_M"), str) else None)
+            if tiers:  # the sheet formula does not match the contract; the contract's slabs win
+                return [{"component_type": "load_percent_tiered", "label": "Platform fee — slabs on Add Money", "params": {"tiers": tiers, "mode": "whole"}}], ["slabs_parsed"]
         if "P-S*0.5" in rule.replace(" ", "") and base is not None:
             return [{"component_type": "fixed_minus_upi_credit", "label": "Platform fee less UPI credit", "params": {"base": base, "credit_per_upi_txn": 0.5}}], notes
         return manual("custom formula")
@@ -165,7 +169,7 @@ def _platform(r: dict) -> tuple[list[dict], list[str]]:
             cm = re.search(r"less ₹\s*(\d+(?:\.\d+)?)", rule, re.I)
             b = _money(rule)
             return ([{"component_type": "fixed_minus_upi_credit", "label": "Platform fee less UPI credit", "params": {"base": b, "credit_per_upi_txn": float(cm.group(1))}}], notes) if cm and b else manual("upi credit")
-        m = re.search(r"₹\s*([\d,]+) fixed (?:per month )?up to (\d+) (trucks?|drivers?)[;,]?.*?₹\s*([\d,]+)\s*/\s*(truck|driver)", rule, re.I)
+        m = re.search(r"₹\s*([\d,]+)(?: fixed)? (?:per month )?up to (\d+) (trucks?|drivers?)[;,]?.*?₹\s*([\d,]+)\s*/\s*(truck|driver)", rule, re.I)
         if m:
             return [{"component_type": "per_unit_fleet", "label": "Platform fee (fleet)", "params": {"base": float(m.group(1).replace(",", "")), "included_units": float(m.group(2)),
                     "rate_per_extra_unit": float(m.group(4).replace(",", "")), "unit": "truck" if m.group(3).lower().startswith("truck") else "driver"}}], notes
@@ -255,6 +259,109 @@ def _users(r: dict) -> list[dict]:
     if _num(C.get("admin_rate")) is not None:
         out.append({"component_type": "per_admin", "label": "Admins / co-admins", "params": {"rate": C["admin_rate"], "free_admins": _num(C.get("free_admins")) or 0}})
     return out
+
+
+
+# ------------------------------------------------------------------ placeholders that can be resolved
+_NOT_BILLABLE_STATUS = ("dropped", "demo", "not billable")
+
+
+def _k(num: str, suffix: str | None) -> float:
+    v = float(num.replace(",", ""))
+    return v * 1000 if suffix and suffix.lower() == "k" else v
+
+
+def _text_rate_and_minimum(text: str) -> tuple[float, float | None] | None:
+    """'2% of the funds added or 7K whichever is higher' / '1.5% or 5000 MG from 5th month' -> (0.02, 7000.0)."""
+    m = re.search(r"(\d+(?:\.\d+)?)\s*%", text or "")
+    if not m:
+        return None
+    rest = text[m.end():]
+    mn = re.search(r"\bor\s*(?:rs\.?|₹)?\s*([\d,]+(?:\.\d+)?)\s*([kK])?(?![\d%])", rest, re.I)
+    return float(m.group(1)) / 100, (_k(mn.group(1), mn.group(2)) if mn else None)
+
+
+def _clear_placeholders(r: dict, comps: list[dict]) -> tuple[list[dict], list[str], list[str]]:
+    """Resolve 'needs modelling' placeholders the data itself settles. Returns (components, extra tags, assumptions).
+    Anything interpreted rather than read is returned as an assumption for Finance to confirm; only genuinely
+    undecidable wording keeps its placeholder (which keeps that invoice withheld)."""
+    status = (r.get("status") or "").lower()
+    A = r.get("A_platform") or {}
+    rule, rate_txt, contract = A.get("rule") or "", A.get("rate_M") if isinstance(A.get("rate_M"), str) else "", str(r.get("contract_text") or "")
+    notes = " ".join(str(n.get("cat", "")) for n in (r.get("sheet_notes") or [])).lower()
+    out: list[dict] = []
+    tags: list[str] = []
+    assume: list[str] = []
+    for c in comps:
+        if c["component_type"] != "manual_formula" or "Platform fee" not in c["label"]:
+            out.append(c)
+            continue
+        why = (c["params"].get("rule") or "").lower()
+        source = " ".join(x for x in (rate_txt, contract) if x)
+        if any(w in status for w in _NOT_BILLABLE_STATUS):
+            tags.append("terms_not_captured")  # dropped / demo: nothing will ever bill, so there is nothing to model
+            continue
+        if "rate is not numeric" in why and (hit := _text_rate_and_minimum(rate_txt)):  # the rate cell only: contract text may hold UPI percentages
+            rate, mn = hit
+            p = {"rate": rate}
+            note = None
+            if mn and re.search(r"mg from (\d+)\w* month", source, re.I):
+                note = f"The minimum ₹{mn:,.0f} starts from month {re.search(r'mg from (\d+)', source, re.I).group(1)} of service; the go-live date is not on file, so set 'Minimum applies from' on the contract."
+            elif mn:
+                p["min_amount"] = mn
+            out.append({"component_type": "load_percent", "label": "Platform fee — % of Add Money", "params": p})
+            if note:
+                assume.append(note)
+            continue
+        fleet = re.search(r"(\d[\d,]*(?:\.\d+)?)\s*/\s*per\s*(truck|driver)", rate_txt, re.I) if "rate is not numeric" in why else None
+        if fleet:
+            out.append({"component_type": "per_unit_fleet", "label": "Fleet fee", "params": {"base": 0.0, "included_units": 0.0, "rate_per_extra_unit": float(fleet.group(1).replace(",", "")), "unit": fleet.group(2).lower()}})
+            clause = re.search(r"after\s*(\d+)\s*cr\w*\s*([\d,]+)\s*/\s*cr", rate_txt, re.I)
+            if clause:  # genuinely ambiguous wording: keep it visible and keep the invoice withheld until Finance decides
+                out.append({"component_type": "manual_formula", "label": "Platform fee (needs modelling)", "params": {
+                    "rule": f"load-fee clause '{clause.group(0)}' (maybe ₹{clause.group(2)} per crore of Add Money above ₹{clause.group(1)} crore): confirm the meaning"}})
+            continue
+        if re.search(r"annual|periodic|quarterly|half", status + " " + notes):
+            tags.append("fee_via_subscription")  # the platform fee is a subscription invoice on the register, not a monthly line
+            continue
+        if re.search(r"no base amount|rate is not numeric", why):
+            assume.append("The legacy sheet has no platform fee for this customer (it billed ₹0 for it). Billed on usage only. Confirm there is no fixed or percentage fee in the contract.")
+            continue
+        if "fleet fee not coded" in why or "unrecognised platform-fee rule" in why:
+            m = re.search(r"₹\s*([\d,]+)\s*(?:per month|monthly)?\s*up to\s*(\d+)\s*(trucks?|drivers?)", rule + " " + contract, re.I)
+            if m and "/truck" not in rule.lower() and "/driver" not in rule.lower():
+                out.append({"component_type": "fixed_amount", "label": "Platform fee", "params": {"amount": float(m.group(1).replace(",", ""))}})
+                assume.append(f"The contract says ₹{m.group(1)} a month 'up to {m.group(2)} {m.group(3)}' and states no rate above that, so it is billed as a flat ₹{m.group(1)}. Confirm what applies above {m.group(2)}.")
+                continue
+            m = re.search(r"₹\s*([\d,]+)\s*per\s*truck\s*/\s*driver", rule, re.I)
+            if m:
+                out.append({"component_type": "per_unit_fleet", "label": "Fleet fee", "params": {"base": 0.0, "included_units": 0.0, "rate_per_extra_unit": float(m.group(1).replace(",", "")), "unit": "truck"}})
+                assume.append("'Per truck / driver' is billed on the truck count. Confirm whether drivers should be counted too (the usage feed can supply either).")
+                continue
+        out.append(c)
+    return out, tags, assume
+
+
+def _fix_related_usage_components(r: dict, comps: list[dict]) -> tuple[list[dict], list[str]]:
+    """Wordings that live next to the platform fee but belong to the UPI charge."""
+    assume: list[str] = []
+    A = r.get("A_platform") or {}
+    text = " ".join(str(x) for x in (A.get("rule"), r.get("sheet_remarks"), r.get("contract_text")) if x)
+    out = list(comps)
+    m = re.search(r"([\d,]+)\s*txns? free each", text, re.I) or re.search(r"([\d,]+)\s*free every month", text, re.I)
+    if m:
+        free = float(m.group(1).replace(",", ""))
+        for c in out:
+            if c["component_type"] == "upi_per_txn" and not c["params"].get("free_txns"):
+                c["params"]["free_txns"] = free
+                if re.search(r"collective", text, re.I):
+                    assume.append(f"{free:,.0f} UPI transactions are free for each entity. The contract also mentions a collective threshold shared with a sister entity; that pooling is not modelled, so each entity is billed on its own.")
+    if re.search(r"UPI\s*₹?\s*(\d+(?:\.\d+)?)\b", text) and not any(c["component_type"].startswith("upi") and c["component_type"] != "upi_free" for c in out) and (r.get("B_upi") or {}).get("type") in (None, "None", "Free"):
+        rate = float(re.search(r"UPI\s*₹?\s*(\d+(?:\.\d+)?)\b", text).group(1))
+        out = [c for c in out if c["component_type"] != "upi_free"]
+        out.append({"component_type": "upi_per_txn", "label": "UPI fee", "params": {"rate": rate, "free_txns": 0}})
+        assume.append(f"The contract has a UPI fee of ₹{rate:g} per transaction that the legacy sheet never billed. It is billed now; expect a higher invoice than before.")
+    return out, assume
 
 
 # ------------------------------------------------------------------ events
@@ -378,6 +485,12 @@ def _import_rules_rows(db, lines, existing, by_row, user_email, lock, replace) -
 
         platform, tags = _platform(r)
         comps = [*platform, *_upi(r), *_users(r), *_module(r)]
+        had_placeholder = any(c["component_type"] == "manual_formula" for c in comps)  # only these rows get the extra interpretation
+        comps, more_tags, assumptions = _clear_placeholders(r, comps)
+        tags = [*tags, *more_tags]
+        if had_placeholder and "terms_not_captured" not in more_tags:
+            comps, more_assumptions = _fix_related_usage_components(r, comps)
+            assumptions = [*assumptions, *more_assumptions]
         unmodelled += sum(c["component_type"] == "manual_formula" for c in comps)
         omin = _num(r.get("overall_min"))
         if "MG deferred" in status:
@@ -393,6 +506,7 @@ def _import_rules_rows(db, lines, existing, by_row, user_email, lock, replace) -
                             overall_min_amount=omin, mg_effective_from="2026-10-01" if "MG deferred" in status else None,
                             status="locked" if lock else "draft", source="import", created_by=user_email,
                             approved_by=user_email if lock else "", approved_at=datetime.datetime.utcnow() if lock else None,
+                            assumptions=[{"text": t, "confirmed_by": "", "confirmed_at": None} for t in assumptions],
                             notes=f"Imported from legacy rulebook row {row}. {' '.join(tags)}".strip())
         db.add(contract)
         for i, c in enumerate(comps):
@@ -413,6 +527,47 @@ def _import_rules_rows(db, lines, existing, by_row, user_email, lock, replace) -
                 db.add(EscalationRule(account_id=acct.id, applies_to="fixed_saas", kind="percent", value=0.10, anniversary_basis="go_live",
                                       next_date=nxt.isoformat(), note="10% yearly escalation (from the legacy sheet)"))
     return created, skipped, updated, unmodelled
+
+
+def resolve_unmodelled(db: Session, text: str, user_email: str) -> dict:
+    """Re-read the rulebook for accounts whose current contract still has a 'needs modelling' charge and issue a corrected
+    DRAFT version for each one the importer can now settle. Locked versions are never touched; Finance reviews and locks the drafts."""
+    lines = [json.loads(l) for l in text.splitlines() if l.strip()]
+    by_row = {a.source_row: a for a in db.query(BillingAccount).filter(BillingAccount.source_row.isnot(None))}
+    drafted, still_open, skipped_dropped, unchanged = [], [], 0, 0
+    for r in lines:
+        acct = by_row.get(r.get("row"))
+        if acct is None or not acct.contracts:
+            continue
+        latest = max(acct.contracts, key=lambda c: c.version)
+        if not any(k.component_type == "manual_formula" for k in latest.components):
+            continue
+        if any(w in (r.get("status") or "").lower() for w in _NOT_BILLABLE_STATUS):
+            skipped_dropped += 1  # dropped / demo accounts never bill; nothing to correct
+            continue
+        platform, _ = _platform(r)
+        comps, _, assumptions = _clear_placeholders(r, [*platform, *_upi(r), *_users(r), *_module(r)])
+        comps, more = _fix_related_usage_components(r, comps)
+        assumptions = [*assumptions, *more]
+        if sum(c["component_type"] == "manual_formula" for c in comps) >= sum(k.component_type == "manual_formula" for k in latest.components) and \
+                [c["component_type"] for c in comps] == [k.component_type for k in latest.components]:
+            still_open.append({"row": r.get("row"), "name": acct.display_name})
+            unchanged += 1
+            continue
+        new = Contract(account_id=acct.id, version=latest.version + 1, valid_from=latest.valid_from, billing_frequency=latest.billing_frequency,
+                       gst_mode=latest.gst_mode, gst_rate=latest.gst_rate, overall_min_amount=latest.overall_min_amount, overall_cap_amount=latest.overall_cap_amount,
+                       mg_effective_from=latest.mg_effective_from, prorate_mg=latest.prorate_mg, subscription_covers=latest.subscription_covers, status="draft", source="import",
+                       assumptions=[{"text": t, "confirmed_by": "", "confirmed_at": None} for t in assumptions], created_by=user_email,
+                       notes=f"Re-read from the legacy rulebook row {r.get('row')} to clear a charge that needed modelling.")
+        db.add(new)
+        db.flush()
+        for i, c in enumerate(comps):
+            db.add(ContractComponent(contract_id=new.id, component_type=c["component_type"], label=c.get("label", ""), params=c["params"], sort_order=i))
+        item = {"row": r.get("row"), "name": acct.display_name, "version": new.version, "contract_id": new.id, "assumptions": len(assumptions),
+                "still_has_unmodelled": any(c["component_type"] == "manual_formula" for c in comps)}
+        (still_open if item["still_has_unmodelled"] else drafted).append(item)
+    db.commit()
+    return {"drafts_created": len([d for d in drafted]), "drafted": drafted, "still_open": still_open, "skipped_dropped": skipped_dropped}
 
 
 def _period_dates(text: str) -> tuple[str | None, str | None]:

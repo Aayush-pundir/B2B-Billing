@@ -547,6 +547,9 @@ class Contract(Base):
     source = Column(String, default="manual")  # manual | import | escalation
     notes = Column(Text, default="")
     signed_doc_url = Column(String, default="")
+    # Things the importer had to interpret rather than read: [{text, confirmed_by, confirmed_at}]. Each one shows up as a
+    # finding on the invoice until Finance confirms it (or issues a corrected version).
+    assumptions = Column(JSON, default=list)
     created_by = Column(String, default="")
     approved_by = Column(String, default="")
     approved_at = Column(DateTime, nullable=True)

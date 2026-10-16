@@ -40,10 +40,27 @@ def _contract_out(c: Contract) -> dict:
     return {"id": c.id, "version": c.version, "valid_from": c.valid_from, "valid_to": c.valid_to, "status": c.status, "source": c.source,
             "billing_frequency": c.billing_frequency, "gst_mode": c.gst_mode, "gst_rate": c.gst_rate, "overall_min_amount": c.overall_min_amount,
             "overall_cap_amount": c.overall_cap_amount, "mg_effective_from": c.mg_effective_from, "prorate_mg": c.prorate_mg,
-            "subscription_covers": c.subscription_covers or ["A"], "notes": c.notes, "approved_by": c.approved_by,
+            "subscription_covers": c.subscription_covers or ["A"], "notes": c.notes, "assumptions": c.assumptions or [], "approved_by": c.approved_by,
             "approved_at": c.approved_at.isoformat() if c.approved_at else None,
             "components": [{"id": k.id, "component_type": k.component_type, "label": k.label, "params": k.params, "sort_order": k.sort_order,
                             "valid_from": k.valid_from, "valid_to": k.valid_to} for k in c.components]}
+
+
+@router.post("/contracts/{contract_id}/assumptions/{index}/confirm")
+def confirm_assumption(contract_id: int, index: int, db: Session = Depends(get_db), user: User = Depends(require_write("commercials"))):
+    """Finance signs off something the importer had to interpret. The terms themselves stay as they are; if the
+    interpretation is wrong, issue a corrected contract version instead."""
+    c = db.query(Contract).get(contract_id)
+    if not c:
+        raise HTTPException(404, "Contract not found")
+    items = [dict(x) for x in (c.assumptions or [])]
+    if not 0 <= index < len(items):
+        raise HTTPException(404, "No such assumption")
+    items[index].update(confirmed_by=user.email, confirmed_at=datetime.datetime.utcnow().isoformat())
+    c.assumptions = items  # reassigned so the JSON column is saved
+    db.commit()
+    log_action(db, user, "contract.assumption_confirmed", "contract", f"contract={contract_id} #{index}")
+    return {"ok": True, "assumptions": items}
 
 
 @router.get("/catalogue")
@@ -85,7 +102,7 @@ def list_accounts(q: str = "", status: str = "", db: Session = Depends(get_db), 
                     "unmodelled": sum(k.component_type == "manual_formula" for k in (c or latest).components) if (c or latest) else 0,
                     "overall_min": c.overall_min_amount if c else None, "open_exceptions": open_ex.get(a.id, 0), "events": [e.event_type for e in a.events],
                     "kinds": [k.component_type for k in (c or latest).components] if (c or latest) else [], "last_billed": last_billed.get(a.client_id),
-                    "draft_pending": any(x.status == "draft" for x in a.contracts)})
+                    "draft_pending": any(x.status == "draft" for x in a.contracts), "assumptions_open": len(billing_v2.open_assumptions(c or latest))})
     return out
 
 
@@ -493,6 +510,19 @@ async def import_rules(file: UploadFile = File(...), lock: bool = False, replace
         db.rollback()
         raise HTTPException(400, f"Could not read the rules file: {exc}")
     log_action(db, user, "v2.import.rules", "billing_account", str(res))
+    return res
+
+
+@router.post("/import/rules/resolve")
+async def resolve_unmodelled(file: UploadFile = File(...), db: Session = Depends(get_db), user: User = Depends(require_write("commercials"))):
+    """Upload the rulebook again to clear 'needs modelling' charges on accounts that are already imported. Creates draft versions only."""
+    text = (await file.read()).decode("utf-8-sig", errors="replace")
+    try:
+        res = importer_v2.resolve_unmodelled(db, text, user.email)
+    except (ValueError, KeyError) as exc:
+        db.rollback()
+        raise HTTPException(400, f"Could not read the rules file: {exc}")
+    log_action(db, user, "v2.import.resolve_unmodelled", "billing_account", f"drafts={res['drafts_created']} still_open={len(res['still_open'])}")
     return res
 
 

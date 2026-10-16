@@ -24,6 +24,12 @@ calculation, reconciliation, and reporting runs locally.
 4. **Lock:** only possible when the queue is empty, and not by the person who calculated the run.
 5. **Push to Zoho:** a background job creates the draft invoices (one Zoho line per charge) with progress, per-invoice errors, safe re-runs and no duplicates (matched on invoice reference). Customers are matched in Zoho by GSTIN or name before a new one is created. Set `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`, `ZOHO_REFRESH_TOKEN` and `ZOHO_ORG_ID`; until then it runs in simulation mode.
 
+## Importing the rulebook and clearing 'needs modelling' charges
+
+The rulebook importer reads each customer's wording into typed charges. Where the wording is unambiguous it is modelled outright (for example "2% or 7K whichever is higher", "₹3,500 up to 99 trucks, ₹100/truck from the 100th", slabs). Where it had to be *interpreted* (a blank platform fee, "per truck/driver", a minimum that starts "from the 5th month") the charge is billed as read and the interpretation is saved as an **assumption** on the contract. Every unconfirmed assumption flags that invoice in the month-end review until Finance presses **Confirm**. Genuinely ambiguous wording stays as "needs modelling" and withholds that invoice.
+
+Already imported your rulebook? Upload it again under **Billing accounts → Import & mapping → Clear 'needs modelling' charges**. It creates corrected *draft* versions only for accounts that still have an unmodelled charge, skips dropped accounts, never touches locked versions and is safe to repeat. Finance reviews, confirms the assumptions and locks each draft.
+
 ## Order-to-cash cycle
 
 1. **Customer master data** — full identity/tax/contact/billing profile; bulk

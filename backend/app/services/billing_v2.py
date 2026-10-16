@@ -167,6 +167,17 @@ def compute_account(db: Session, account: BillingAccount, period: str, snaps: di
             "lines": res["lines"], "subtotal": res["subtotal"], "flags": res["flags"], "exceptions": []}
 
 
+def billable_accounts(db: Session, period: str) -> list[BillingAccount]:
+    """Accounts that will actually be invoiced in the period (live, not paused or dropped, with a locked contract)."""
+    accounts = db.query(BillingAccount).options(selectinload(BillingAccount.enterprises), selectinload(BillingAccount.events),
+                                                selectinload(BillingAccount.contracts).selectinload(Contract.components)).all()
+    return [a for a in accounts if lifecycle(a, period)["billable"] and active_contract(a, period) is not None]
+
+
+def open_assumptions(contract: Contract | None) -> list[dict]:
+    return [a for a in (contract.assumptions or []) if not a.get("confirmed_by")] if contract is not None else []
+
+
 # ------------------------------- groups -------------------------------
 
 def _group_a(r: dict) -> D:
@@ -257,6 +268,8 @@ def validate_account(db: Session, r: dict, period: str) -> list[dict]:
             field = f.split(":", 1)[1]
             sev = "high" if field in ("upi_spend_after_free", "upi_amount_split", "card_share_pct", "truck_count", "driver_count") else "medium"
             _ex(out, "INPUT_MISSING", sev, f"{name}: needs '{field}' for this period but none was supplied — that charge is ₹0. Enter it as a manual usage input or extend the usage query.")
+    for a in open_assumptions(r["contract"]):
+        _ex(out, "ASSUMPTION_UNCONFIRMED", "medium", f"{name}: {a['text']}")
     if "floored_at_zero" in flags:
         _ex(out, "NEGATIVE_COMPONENT", "medium", f"{name}: a component computed below zero and was floored at ₹0 (free allowance exceeds usage or credit exceeds base).")
     if r["manual"]:

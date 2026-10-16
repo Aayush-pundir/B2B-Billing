@@ -404,3 +404,88 @@ def test_account_list_has_terms_last_billed_and_draft_flags(fin):
     assert "load_percent" in beta["kinds"]                                   # earlier tests may have revised the rest of Beta's contract
     assert beta["last_billed"]["amount"] > 0 and beta["last_billed"]["period"] >= "2026-09"
     assert all("draft_pending" in r for r in rows.values())
+
+
+# ---- unmodelled-charge resolution (synthetic rows that reuse the real wordings, no customer data) ----
+def _placeholder(rule="no base amount: Fixed monthly SaaS fee None"):
+    return [{"component_type": "manual_formula", "label": "Platform fee (needs modelling)", "params": {"rule": rule}}]
+
+
+def _row(status="Active", rate_cell="", contract="", rule="", notes=()):
+    return {"status": status, "contract_text": contract, "sheet_notes": [{"cat": n} for n in notes], "A_platform": {"rule": rule, "rate_M": rate_cell}}
+
+
+def test_text_rate_with_minimum_becomes_a_load_percent():
+    from app.services.importer_v2 import _clear_placeholders, _text_rate_and_minimum
+    assert _text_rate_and_minimum("2% of the funds added or 7K which ever is higher") == (0.02, 7000.0)
+    assert _text_rate_and_minimum("1.5% pay as you go or 5K+Taxes, whichever is higher") == (0.015, 5000.0)
+    assert _text_rate_and_minimum("2% or 1500 whichever is higher") == (0.02, 1500.0)
+    comps, _, assume = _clear_placeholders(_row(rate_cell="1.5% of loading or 5k whichever is higher"), _placeholder("rate is not numeric in the legacy sheet"))
+    assert comps == [{"component_type": "load_percent", "label": "Platform fee — % of Add Money", "params": {"rate": 0.015, "min_amount": 5000.0}}] and not assume
+    comps, _, assume = _clear_placeholders(_row(rate_cell="1.5% or 5000 MG from 5th month"), _placeholder("rate is not numeric in the legacy sheet"))
+    assert comps[0]["params"] == {"rate": 0.015} and "month 5" in assume[0]          # minimum cannot be dated without a go-live: asked, not guessed
+
+
+def test_percentages_in_the_contract_text_are_not_mistaken_for_the_platform_rate():
+    from app.services.importer_v2 import _clear_placeholders
+    row = _row(status="Active – annual subscription", contract="UPI 2.50/- flat up to 2500/- and 0.1% of the total sum above")
+    comps, tags, assume = _clear_placeholders(row, _placeholder("rate is not numeric in the legacy sheet"))
+    assert comps == [] and "fee_via_subscription" in tags and not assume              # annual: the fee is a subscription invoice
+
+
+def test_dropped_blank_fee_and_fleet_cases():
+    from app.services.importer_v2 import _clear_placeholders, _fix_related_usage_components
+    comps, tags, _ = _clear_placeholders(_row(status="Dropped"), _placeholder())
+    assert comps == [] and "terms_not_captured" in tags
+    comps, _, assume = _clear_placeholders(_row(), _placeholder())
+    assert comps == [] and "no platform fee" in assume[0]                              # billed on usage only, with a question attached
+    fleet = _row(rule="₹100 per truck/driver per month (not formula-coded). UPI: 2,500 txns free each; collective 5,000 threshold", contract="100 Per truck / driver per month")
+    comps, _, assume = _clear_placeholders(fleet, _placeholder("fleet fee not coded"))
+    assert comps[0]["component_type"] == "per_unit_fleet" and comps[0]["params"]["rate_per_extra_unit"] == 100.0 and "drivers" in assume[0]
+    upi, more = _fix_related_usage_components(fleet, [{"component_type": "upi_per_txn", "label": "UPI fee", "params": {"rate": 2.5, "free_txns": 0}}])
+    assert upi[0]["params"]["free_txns"] == 2500.0 and "collective" in more[0]
+    flat = _row(rule="₹3,000 per month up to 80 drivers; UPI ₹2.5 (not coded)", contract="3000 Monthly upto 80 driver & 2.5 UPI")
+    comps, _, assume = _clear_placeholders(flat, _placeholder("unrecognised platform-fee rule"))
+    assert comps[0]["params"] == {"amount": 3000.0} and "above 80" in assume[0]
+    upi, more = _fix_related_usage_components(flat, [])
+    assert upi[0]["component_type"] == "upi_per_txn" and upi[0]["params"]["rate"] == 2.5 and "never billed" in more[0]
+
+
+def test_ambiguous_load_clause_keeps_the_invoice_withheld():
+    from app.services.importer_v2 import _clear_placeholders
+    row = _row(status="Not yet live", rate_cell="100/Per truck, UPI 2.5/Transaction, after 1CR 20000/CR")
+    comps, _, _ = _clear_placeholders(row, _placeholder("rate is not numeric in the legacy sheet"))
+    assert [c["component_type"] for c in comps] == ["per_unit_fleet", "manual_formula"]  # fleet is read; the unclear clause still blocks billing
+
+
+def test_assumptions_show_as_findings_until_finance_confirms(fin, fin2):
+    from app.database import SessionLocal
+    from app.models import BillingAccount
+    db = SessionLocal()
+    beta = db.query(BillingAccount).filter(BillingAccount.display_name == "Beta Load Co").one()
+    contract = max((c for c in beta.contracts if c.status in ("locked", "superseded")), key=lambda c: c.version)   # the one billing uses
+    contract.assumptions = [{"text": "Test assumption: billed on usage only.", "confirmed_by": "", "confirmed_at": None}]
+    cid, aid = contract.id, beta.id
+    db.commit()
+    db.close()
+    rows = {r["name"]: r for r in fin.get("/api/v2/accounts").json()}
+    assert rows["Beta Load Co"]["assumptions_open"] == 1
+    assert any(a["confirmed_by"] == "" for c in fin.get(f"/api/v2/accounts/{aid}").json()["contracts"] for a in c["assumptions"])
+    assert any(i["key"] == "assumptions" for i in fin.get("/api/close/checklist?period=2026-11").json()["items"])
+    assert fin.post(f"/api/v2/contracts/{cid}/assumptions/5/confirm").status_code == 404
+    done = fin.post(f"/api/v2/contracts/{cid}/assumptions/0/confirm").json()
+    assert done["assumptions"][0]["confirmed_by"] == "finance@test.local"
+    assert {r["name"]: r for r in fin.get("/api/v2/accounts").json()}["Beta Load Co"]["assumptions_open"] == 0
+
+
+def test_reread_rulebook_to_clear_unmodelled_is_draft_only_and_repeatable(fin, acc):
+    text = "\n".join(json.dumps(r, ensure_ascii=False) for r in RULES)
+    f = {"file": ("r.jsonl", text.encode())}
+    assert acc.post("/api/v2/import/rules/resolve", files=f).status_code == 403          # only Finance amends terms
+    first = fin.post("/api/v2/import/rules/resolve", files={"file": ("r.jsonl", text.encode())})
+    assert first.status_code == 200 and {"drafts_created", "drafted", "still_open", "skipped_dropped"} <= set(first.json())
+    again = fin.post("/api/v2/import/rules/resolve", files={"file": ("r.jsonl", text.encode())}).json()
+    assert again["drafts_created"] == 0                                                   # nothing new the second time
+    for d in first.json()["drafted"]:
+        c = next(c for c in fin.get(f"/api/v2/accounts/{[a for a in fin.get('/api/v2/accounts').json() if a['name'] == d['name']][0]['id']}").json()["contracts"] if c["id"] == d["contract_id"])
+        assert c["status"] == "draft"                                                     # never locks by itself

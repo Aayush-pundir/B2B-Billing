@@ -67,12 +67,13 @@ async function v2AccountsTab(panel) {
   if (state.v2Q) { f.q = state.v2Q; state.v2Q = ''; f.page = 0; }
   const rows = await Apx.v2('/accounts');
   const PER = 50;
-  const needs = (r) => !r.mapped || r.unmodelled > 0 || r.open_exceptions > 0 || r.draft_pending;
+  const needs = (r) => !r.mapped || r.unmodelled > 0 || r.open_exceptions > 0 || r.draft_pending || r.assumptions_open > 0;
   const queues = [
     ['all', 'All', rows.length, null],
     ['attention', 'Needs attention', rows.filter(r => r.billable && needs(r)).length, 'warn'],
     ['unmapped', 'No enterprise ID', rows.filter(r => r.billable && !r.mapped).length, 'warn'],
     ['unmodelled', 'To model', rows.filter(r => r.unmodelled > 0).length, 'warn'],
+    ['assumptions', 'To confirm', rows.filter(r => r.billable && r.assumptions_open).length, 'warn'],
     ['drafts', 'Draft contract', rows.filter(r => r.draft_pending).length, null],
     ['billable', 'Billable', rows.filter(r => r.billable).length, null],
     ['paused', 'Paused or dropped', rows.filter(r => !r.billable).length, null],
@@ -91,7 +92,7 @@ async function v2AccountsTab(panel) {
   const view = () => {
     const q = f.q.toLowerCase();
     let list = rows.filter(r => (!q || (r.name + ' ' + r.enterprise_ids.join(' ')).toLowerCase().includes(q)) && (!f.kam || r.kam === f.kam) && ({
-      all: () => true, attention: () => r.billable && needs(r), unmapped: () => r.billable && !r.mapped, unmodelled: () => r.unmodelled > 0, drafts: () => r.draft_pending,
+      all: () => true, attention: () => r.billable && needs(r), unmapped: () => r.billable && !r.mapped, unmodelled: () => r.unmodelled > 0, assumptions: () => r.billable && r.assumptions_open > 0, drafts: () => r.draft_pending,
       billable: () => r.billable, paused: () => !r.billable })[f.queue]());
     const issues = (r) => (r.mapped ? 0 : 3) + r.unmodelled * 2 + r.open_exceptions + (r.draft_pending ? 1 : 0);
     if (f.sort === 'billed') list = [...list].sort((x, y) => ((y.last_billed || {}).amount || -1) - ((x.last_billed || {}).amount || -1));
@@ -104,7 +105,7 @@ async function v2AccountsTab(panel) {
     panel.querySelector('#v2-table').innerHTML = tbl(['Account', 'State', 'Terms', '>Last billed', 'Needs', ''], shown.map(r => {
       const kinds = [...new Set(r.kinds.map(k => V2_KIND_CHIP[k] || k))];
       const flags = [!r.mapped && r.billable ? '<span class="rchip high">no enterprise ID</span>' : '', r.unmodelled ? `<span class="rchip medium">${r.unmodelled} to model</span>` : '',
-        r.open_exceptions ? `<span class="rchip medium">${r.open_exceptions} finding${r.open_exceptions > 1 ? 's' : ''}</span>` : '', r.draft_pending ? '<span class="rchip">draft contract</span>' : ''].join('');
+        r.open_exceptions ? `<span class="rchip medium">${r.open_exceptions} finding${r.open_exceptions > 1 ? 's' : ''}</span>` : '', r.assumptions_open ? `<span class="rchip medium">${r.assumptions_open} to confirm</span>` : '', r.draft_pending ? '<span class="rchip">draft contract</span>' : ''].join('');
       return `<tr data-id="${r.id}" class="v2-row">
         <td><b>${esc(r.name)}</b><div class="muted mono" style="font-size:.74rem">${r.mapped ? esc(r.enterprise_ids.join(', ')) : 'not mapped'}${r.kam ? ' · ' + esc(r.kam) : ''}</div></td>
         <td><span class="badge ${r.billable ? 'locked' : 'none'}">${esc(r.state)}</span></td>
@@ -167,7 +168,13 @@ function v2Contract(el, a, cat, reload, call) {
       <div class="form-grid">${edit ? `<label>Label<input class="c-label" value="${esc(k.label)}" /></label>` : ''}${defs.map(d => paramField(d, k.params?.[d.key])).join('')}</div>
       ${edit ? '' : `<div class="muted mono" style="font-size:.74rem">${esc(JSON.stringify(k.params))}</div>`}</div>`;
   };
+  const assumptions = cur.assumptions || [];
+  const assumptionHtml = assumptions.length ? `<div class="card assume ${assumptions.some(x => !x.confirmed_by) ? 'open' : ''}"><h3 style="margin:0 0 .5rem"><i class="fa-solid fa-circle-question"></i> Read from the legacy sheet, not stated outright</h3>
+      <p class="muted" style="margin-top:0">These were interpreted when the terms were imported. They bill as shown and flag the invoice in the month-end review until Finance confirms. If one is wrong, make a new version with the right terms.</p>
+      <ul class="assume-list">${assumptions.map((x, i) => `<li class="${x.confirmed_by ? 'ok' : ''}"><span>${esc(x.text)}${x.confirmed_by ? `<div class="muted">Confirmed by ${esc(x.confirmed_by)}</div>` : ''}</span>
+        ${!x.confirmed_by && isFinance() ? `<button class="secondary as-ok" data-i="${i}">Confirm</button>` : x.confirmed_by ? '<i class="fa-solid fa-circle-check" style="color:var(--ok)"></i>' : ''}</li>`).join('')}</ul></div>` : '';
   el.innerHTML = `
+    ${assumptionHtml}
     <div class="card"><div class="flex-between"><h3 style="margin:0">Contract versions</h3>
       <div class="actions-row" style="margin:0"><select id="c-ver">${cs.map(c => `<option value="${c.id}" ${c.id === cur.id ? 'selected' : ''}>v${c.version} · ${c.status} · from ${esc(c.valid_from)}${c.valid_to ? ' to ' + esc(c.valid_to) : ''}</option>`).join('')}</select>
         ${isFinance() ? '<button class="ghost" id="c-new"><i class="fa-solid fa-code-branch"></i> New version</button>' : ''}</div></div>
@@ -183,6 +190,7 @@ function v2Contract(el, a, cat, reload, call) {
         <label>GST rate<input type="number" step="any" id="c-gst" value="${cur.gst_rate}" ${edit ? '' : 'disabled'} /></label></div></div>
     <div id="c-comps">${cur.components.map(compRow).join('') || '<div class="card muted">No charges in this version.</div>'}</div>
     ${edit ? `<div class="actions-row"><button class="ghost" id="c-add"><i class="fa-solid fa-plus"></i> Add charge</button><button id="c-save"><i class="fa-solid fa-floppy-disk"></i> Save draft</button><button class="secondary" id="c-lock"><i class="fa-solid fa-lock"></i> Lock version</button></div>` : ''}`;
+  el.querySelectorAll('.as-ok').forEach(b => b.addEventListener('click', () => call(() => Apx.v2(`/contracts/${cur.id}/assumptions/${b.dataset.i}/confirm`, { method: 'POST' }), 'Confirmed')));
   document.getElementById('c-ver').onchange = e => { state.v2Contract = Number(e.target.value); reload(); };
   document.getElementById('c-new')?.addEventListener('click', () => call(async () => { const r = await Apx.v2(`/accounts/${a.id}/contracts`, { method: 'POST' }); state.v2Contract = r.id; }, 'New draft version created'));
   if (!edit) return;
@@ -338,6 +346,8 @@ function v2ImportTab(panel) {
         <div class="actions-row"><a class="btn ghost" href="${Apx.v2mappingTemplateUrl()}"><i class="fa-solid fa-download"></i> Template</a><input type="file" id="im-map" accept=".csv" /></div><button id="im-map-go" ${can ? '' : 'disabled'}>Import mapping</button></div>
       <div class="card"><h3><i class="fa-solid fa-calendar-check"></i> 3 · Periodic register (CSV)</h3><p class="muted">Annual / quarterly subscription invoices. They stop the monthly run from billing the platform fee for a covered month.</p>
         <input type="file" id="im-reg" accept=".csv" /><div style="margin-top:.6rem"><button id="im-reg-go" ${can ? '' : 'disabled'}>Import register</button></div></div>
+      <div class="card"><h3><i class="fa-solid fa-wand-magic-sparkles"></i> Clear 'needs modelling' charges</h3><p class="muted">Already imported your rulebook? Upload it again here. Accounts that still have an unmodelled charge get a corrected <b>draft</b> version where the wording can now be read; anything interpreted is listed for Finance to confirm. Locked versions are never touched and dropped accounts are skipped.</p>
+        <input type="file" id="im-resolve" accept=".jsonl,.json,.txt" /><div style="margin-top:.6rem"><button id="im-resolve-go" ${can ? '' : 'disabled'}>Re-read unmodelled charges</button></div></div>
       <div class="card"><h3><i class="fa-solid fa-arrow-trend-up"></i> Apply price escalations</h3><p class="muted">Creates draft contract versions for every escalation rule due on or before the date. Review and lock each one.</p>
         <div class="actions-row"><input type="date" id="im-esc" value="${todayStr()}" /><button id="im-esc-go" ${can ? '' : 'disabled'}>Create drafts</button></div><div id="im-esc-out"></div></div></div>
     <div id="im-out"></div>`;
@@ -346,6 +356,7 @@ function v2ImportTab(panel) {
     const f = document.getElementById(input).files[0]; if (!f) return toast('Choose a file first', true);
     try { show(title, await Apx.v2form(path, f, typeof params === 'function' ? params() : params)); toast(`${title} complete`); } catch (e) { toast(e.message, true); } });
   upload('im-rules-go', 'im-rules', '/import/rules', () => `?lock=${panel.querySelector('#im-lock').checked}&replace=${panel.querySelector('#im-replace').checked}`, 'Rulebook import');
+  upload('im-resolve-go', 'im-resolve', '/import/rules/resolve', '', 'Re-read of unmodelled charges');
   upload('im-map-go', 'im-map', '/import/mapping', '', 'Mapping import');
   upload('im-reg-go', 'im-reg', '/import/register', '', 'Register import');
   panel.querySelector('#im-esc-go').addEventListener('click', async () => { try { const r = await Apx.v2('/escalations/apply', { method: 'POST', body: { through: panel.querySelector('#im-esc').value } }); show('Escalation drafts', r); toast(`${r.drafts_created.length} draft version(s) created`); } catch (e) { toast(e.message, true); } });
