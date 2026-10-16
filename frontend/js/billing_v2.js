@@ -347,7 +347,11 @@ function v2ImportTab(panel) {
       <div class="card"><h3><i class="fa-solid fa-wand-magic-sparkles"></i> Suggest the enterprise IDs</h3><p class="muted">Export the platform's customer list (enterprise ID and name, GSTIN if you have it) and upload it here. Confident matches are filled into a mapping file for you to review; close matches are listed beside it, not filled in. Then import that file in step 2.</p>
         <input type="file" id="im-suggest" accept=".csv" /><div style="margin-top:.6rem"><button id="im-suggest-go" ${can ? '' : 'disabled'}>Suggest mapping</button></div></div>
       <div class="card"><h3><i class="fa-solid fa-calendar-check"></i> 3 · Periodic register (CSV)</h3><p class="muted">Annual / quarterly subscription invoices. They stop the monthly run from billing the platform fee for a covered month.</p>
-        <input type="file" id="im-reg" accept=".csv" /><div style="margin-top:.6rem"><button id="im-reg-go" ${can ? '' : 'disabled'}>Import register</button></div></div>
+        <input type="file" id="im-reg" accept=".csv" /><div class="actions-row" style="margin-top:.6rem"><button id="im-reg-go" ${can ? '' : 'disabled'}>Import register</button>
+          <button class="secondary" id="im-reg-new" ${can ? '' : 'disabled'} title="Customers on the register that are not in the rulebook">Add the missing customers</button></div></div>
+      <div class="card"><h3><i class="fa-solid fa-scale-balanced"></i> Apply a corrections file</h3><p class="muted">Where a contract and the legacy sheet disagree, a corrections file says what the contract says, row by row. Each change becomes a <b>draft</b> contract version (or a group edit) for Finance to check and lock. Safe to apply twice.</p>
+        <input type="file" id="im-corr" accept=".json" /><div class="actions-row" style="margin-top:.6rem"><label class="inline-check"><input type="checkbox" id="im-corr-lock" /> lock the drafts straight away</label>
+        <button id="im-corr-go" ${can ? '' : 'disabled'}>Apply corrections</button></div></div>
       <div class="card"><h3><i class="fa-solid fa-wand-magic-sparkles"></i> Clear 'needs modelling' charges</h3><p class="muted">Already imported your rulebook? Upload it again here. Accounts that still have an unmodelled charge get a corrected <b>draft</b> version where the wording can now be read; anything interpreted is listed for Finance to confirm. Locked versions are never touched and dropped accounts are skipped.</p>
         <input type="file" id="im-resolve" accept=".jsonl,.json,.txt" /><div style="margin-top:.6rem"><button id="im-resolve-go" ${can ? '' : 'disabled'}>Re-read unmodelled charges</button></div></div>
       <div class="card"><h3><i class="fa-solid fa-arrow-trend-up"></i> Apply price escalations</h3><p class="muted">Creates draft contract versions for every escalation rule due on or before the date. Review and lock each one.</p>
@@ -371,6 +375,10 @@ function v2ImportTab(panel) {
       toast('Suggestions ready');
     } catch (e) { toast(e.message, true); }
   });
+  upload('im-corr-go', 'im-corr', '/import/corrections', () => `?lock=${panel.querySelector('#im-corr-lock').checked}`, 'Corrections');
+  panel.querySelector('#im-reg-new').addEventListener('click', async () => {
+    try { const r = await Apx.v2('/import/register/create-accounts', { method: 'POST' }); show('Missing customers', r); toast(r.created.length ? `${r.created.length} customer(s) added, ${r.invoices_linked} invoice(s) linked` : 'No customers missing'); }
+    catch (e) { toast(e.message, true); } });
   upload('im-resolve-go', 'im-resolve', '/import/rules/resolve', '', 'Re-read of unmodelled charges');
   upload('im-map-go', 'im-map', '/import/mapping', '', 'Mapping import');
   upload('im-reg-go', 'im-reg', '/import/register', '', 'Register import');

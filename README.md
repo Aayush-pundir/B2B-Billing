@@ -30,6 +30,11 @@ Do these in order. **Month close → Check inputs** shows where you stand.
 
     BILLING_RULES_JSONL=... BILLING_REGISTER_CSV=... python tests/e2e_real_scale.py
 
+## Corrections and missing customers
+
+- **Corrections file** (*Import & mapping → Apply a corrections file*): where a contract and the legacy sheet disagree, a small JSON file says what the contract says, row by row (replace or modify a charge, change the minimum or cap, add or edit a group, attach an assumption to confirm). Each change becomes a draft contract version for Finance to check and lock; locked versions are never edited, and applying the same file twice changes nothing. The format is documented at the top of `backend/app/services/corrections.py`. Keep customer-specific files out of the repo.
+- **Add the missing customers**: customers that appear on the periodic register but not in the rulebook get a customer and billing account (name variants such as `PRABHA ENTERPRISES` / `Prabha Enterprises` are merged), their subscription invoices are linked, and a draft contract waits for any usage charges the agreement has.
+
 ## Month-end close
 
 **Month close** (under Billing) is the monthly job as one guided flow:

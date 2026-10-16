@@ -1,6 +1,7 @@
 """Billing v2 API: accounts, versioned contracts, lifecycle events, groups, subscriptions,
 usage snapshots, simulation, imports and exceptions. Terms are amended by Finance only."""
 import datetime
+import json
 from decimal import Decimal as D
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -259,18 +260,10 @@ def lock_contract(contract_id: int, db: Session = Depends(get_db), user: User = 
     c = db.query(Contract).get(contract_id)
     if not c:
         raise HTTPException(404, "Contract not found")
-    if c.status != "draft":
-        raise HTTPException(400, f"Contract is already {c.status}")
-    if any(k.component_type == "manual_formula" for k in c.components):
-        raise HTTPException(400, "This contract still has components marked 'not modelled' — model them before locking")
-    fd = datetime.date.fromisoformat(c.valid_from)
-    for other in c.account.contracts:
-        if other.id != c.id and other.status == "locked" and (not other.valid_to or other.valid_to >= c.valid_from):
-            other.valid_to = (fd - datetime.timedelta(days=1)).isoformat()
-            if other.valid_to < other.valid_from:
-                other.valid_to = other.valid_from
-            other.status = "superseded"
-    c.status, c.approved_by, c.approved_at = "locked", user.email, datetime.datetime.utcnow()
+    try:
+        billing_v2.lock_contract(c, user.email)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     db.commit()
     log_action(db, user, "v2.contract.lock", "contract", f"{c.account.display_name} v{c.version}")
     return {"ok": True}
@@ -510,6 +503,32 @@ async def import_rules(file: UploadFile = File(...), lock: bool = False, replace
         db.rollback()
         raise HTTPException(400, f"Could not read the rules file: {exc}")
     log_action(db, user, "v2.import.rules", "billing_account", str(res))
+    return res
+
+
+@router.post("/import/register/create-accounts")
+def create_missing_accounts(db: Session = Depends(get_db), user: User = Depends(require_write("commercials"))):
+    """Add the customers that appear on the periodic register but not in the rulebook, and link their subscription invoices."""
+    res = importer_v2.create_missing_accounts(db, user.email)
+    log_action(db, user, "v2.register.create_accounts", "billing_account", f"created={len(res['created'])} invoices={res['invoices_linked']}")
+    return res
+
+
+class CorrectionsIn(BaseModel):
+    corrections: list[dict] = []
+    groups: list[dict] = []
+
+
+@router.post("/import/corrections")
+async def apply_corrections(file: UploadFile = File(...), lock: bool = False, db: Session = Depends(get_db), user: User = Depends(require_write("commercials"))):
+    """Apply a corrections file (what the contract says where the legacy sheet disagrees). Draft versions unless lock=true."""
+    from app.services import corrections
+    try:
+        payload = json.loads((await file.read()).decode("utf-8-sig"))
+    except ValueError as exc:
+        raise HTTPException(400, f"That is not valid JSON: {exc}")
+    res = corrections.apply(db, payload, user.email, lock=lock)
+    log_action(db, user, "v2.import.corrections", "billing_account", f"drafted={len(res['drafted'])} locked={len(res['locked'])} groups={len(res['groups'])} errors={len(res['errors'])}")
     return res
 
 

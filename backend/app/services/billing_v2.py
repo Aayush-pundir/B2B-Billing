@@ -167,6 +167,22 @@ def compute_account(db: Session, account: BillingAccount, period: str, snaps: di
             "lines": res["lines"], "subtotal": res["subtotal"], "flags": res["flags"], "exceptions": []}
 
 
+def lock_contract(c: Contract, user_email: str) -> None:
+    """Make a draft the billing basis: earlier locked versions end the day before it starts. Raises ValueError if it cannot be locked."""
+    if c.status != "draft":
+        raise ValueError(f"Contract is already {c.status}")
+    if any(k.component_type == "manual_formula" for k in c.components):
+        raise ValueError("This contract still has components marked 'not modelled' — model them before locking")
+    fd = datetime.date.fromisoformat(c.valid_from)
+    for other in c.account.contracts:
+        if other.id != c.id and other.status == "locked" and (not other.valid_to or other.valid_to >= c.valid_from):
+            other.valid_to = (fd - datetime.timedelta(days=1)).isoformat()
+            if other.valid_to < other.valid_from:
+                other.valid_to = other.valid_from
+            other.status = "superseded"
+    c.status, c.approved_by, c.approved_at = "locked", user_email, datetime.datetime.utcnow()
+
+
 def billable_accounts(db: Session, period: str) -> list[BillingAccount]:
     """Accounts that will actually be invoiced in the period (live, not paused or dropped, with a locked contract)."""
     accounts = db.query(BillingAccount).options(selectinload(BillingAccount.enterprises), selectinload(BillingAccount.events), selectinload(BillingAccount.client),

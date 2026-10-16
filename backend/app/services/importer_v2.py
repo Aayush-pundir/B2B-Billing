@@ -623,6 +623,60 @@ def import_register(db: Session, text: str) -> dict:
     return {"invoices": created, "unmapped_to_account": unmapped}
 
 
+def _slug(name: str) -> str:
+    return re.sub(r"[^A-Z0-9]+", "-", name.upper()).strip("-")[:24] or "CUSTOMER"
+
+
+def create_missing_accounts(db: Session, user_email: str) -> dict:
+    """Subscription invoices on the periodic register whose customer is not in the rulebook: create the customer and billing
+    account (name variants of one customer are merged), link the invoices, and leave a DRAFT contract for Finance to complete
+    with any usage-based charges, since the rulebook says nothing about them."""
+    from app.services.zoho_sync import normalise, similarity
+    orphans = db.query(SubscriptionInvoice).filter(SubscriptionInvoice.account_id.is_(None)).order_by(SubscriptionInvoice.period_start).all()
+    clusters: list[list[SubscriptionInvoice]] = []
+    for inv in orphans:
+        key = normalise(inv.particulars)
+        for cl in clusters:
+            if similarity(key, normalise(cl[0].particulars)) >= 0.88:
+                cl.append(inv)
+                break
+        else:
+            clusters.append([inv])
+    existing = {normalise(a.display_name): a for a in db.query(BillingAccount).all()}
+    created, linked_only = [], []
+    for cl in clusters:
+        newest = max(cl, key=lambda i: i.period_end or "")
+        name = newest.particulars.strip()
+        name = name.title() if name.isupper() else name           # 'PRABHA ENTERPRISES' -> 'Prabha Enterprises'
+        acct = existing.get(normalise(name))
+        history = "; ".join(f"{i.period_start or '?'} to {i.period_end or '?'}: ₹{i.amount:,.0f}" for i in cl)
+        if acct is None:
+            eid = f"UNMAPPED-{_slug(name)}"
+            n = 1
+            while db.query(Client).filter(Client.enterprise_id == eid).first():
+                n += 1
+                eid = f"UNMAPPED-{_slug(name)}-{n}"
+            client = Client(enterprise_id=eid, name=name, billing_frequency="annual", status="active")
+            db.add(client)
+            db.flush()
+            acct = BillingAccount(client_id=client.id, display_name=name, notes=f"Created from subscription invoices on the periodic register (not in the rulebook). Invoices: {history}.")
+            db.add(acct)
+            db.flush()
+            db.add(AccountEnterprise(account_id=acct.id, enterprise_id=eid, role="primary"))
+            db.add(AccountEvent(account_id=acct.id, event_type="annual_billing", effective_from=min((i.period_start for i in cl if i.period_start), default=None),
+                                payload={}, source_text="Annual subscription on the periodic register", created_by=user_email))
+            db.add(Contract(account_id=acct.id, version=1, valid_from=min((i.period_start for i in cl if i.period_start), default="2020-01-01"), status="draft", source="import",
+                            created_by=user_email, notes="No rulebook row for this customer. The annual subscription is invoiced from the register. Add any usage-based charges the agreement has (UPI, users, load), then lock."))
+            existing[normalise(name)] = acct
+            created.append({"name": name, "invoices": len(cl), "variants": sorted({i.particulars for i in cl})})
+        else:
+            linked_only.append({"name": acct.display_name, "invoices": len(cl)})
+        for inv in cl:
+            inv.account_id = acct.id
+    db.commit()
+    return {"created": created, "linked_to_existing": linked_only, "invoices_linked": sum(len(c) for c in clusters)}
+
+
 def mapping_template(db: Session) -> str:
     buf = io.StringIO()
     w = csv.writer(buf)
