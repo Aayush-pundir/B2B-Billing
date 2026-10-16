@@ -184,6 +184,7 @@ class Invoice(Base):
     # draft -> issued -> sent -> partially_paid -> paid ; or -> overdue / disputed / written_off
     status = Column(String, default="draft")
     zoho_invoice_id = Column(String, nullable=True)
+    zoho_error = Column(String, default="")  # last Zoho push failure for this invoice, cleared on success
     created_at = Column(DateTime, default=now)
 
     payment_terms_days = Column(Integer, default=15)
@@ -684,3 +685,22 @@ class BillingException(Base):
     resolved_by = Column(String, default="")
     resolved_note = Column(String, default="")
     created_at = Column(DateTime, default=now)
+
+
+class ReviewItem(Base):
+    """One line of the month-end review queue: an invoice in a run, why it deserves a second pair of eyes
+    (or that it was picked as a random spot-check), and who cleared it."""
+    __tablename__ = "review_items"
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey("billing_runs.id"), nullable=False, index=True)
+    invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
+    kind = Column(String, default="flag")  # flag = something unusual | spot = random sample of clean invoices
+    reasons = Column(JSON, default=list)  # [{code, label, severity}]
+    status = Column(String, default="needs_review")  # needs_review | reviewed | excluded | auto_cleared
+    amount = Column(Float, default=0.0)
+    prev_amount = Column(Float, nullable=True)  # previous invoice's taxable value, for the month-on-month comparison
+    reviewed_by = Column(String, default="")
+    reviewed_at = Column(DateTime, nullable=True)
+    comment = Column(String, default="")

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, defer
 
 from app.database import get_db
 from app.models import Agreement, BillingAccount, BillingException, BillingRun, Client, Commercial, CreditNote, Invoice, Payment, User
-from app.services import anomalies, billing_v2, csv_parser, invoicing, settings_store, snapshots as usage_snapshots, usage_db, zoho
+from app.services import anomalies, billing_v2, csv_parser, invoicing, review, settings_store, zoho_push, snapshots as usage_snapshots, usage_db, zoho
 from app.services.auth import require_user, require_write
 from app.services.engine import compute_invoice, gst_breakup
 from app.routers.core_routes import log_action
@@ -164,10 +164,12 @@ def _generate_run(db: Session, user, period: str, tds_rate: float, confirm_ids: 
             found.append({"severity": sev[e["severity"]], "code": e["code"], "enterprise_id": "—", "message": e["message"]})
     order = {"high": 0, "medium": 1, "low": 2}
     found.sort(key=lambda a: (order[a["severity"]], a["enterprise_id"]))
+    db.flush()
+    queue = review.build(db, run, v2_out["results"], float(automation["ANOMALY_SWING_PCT"] or 50))
     run_total = round(sum(i.total for i in run.invoices) if run.invoices else 0.0, 2)
     run.summary = {
         "invoices_generated": len(invoices_out), "skipped": skipped, "unknown_enterprise_ids": unknown_ids,
-        "usage_source": source, "anomalies": found, "total": run_total,
+        "usage_source": source, "anomalies": found, "total": run_total, "review": queue,
     }
     run.trigger = trigger
     run.submitted_at = datetime.datetime.utcnow()
@@ -178,12 +180,13 @@ def _generate_run(db: Session, user, period: str, tds_rate: float, confirm_ids: 
         run.status, run.auto_approved, run.approved_by = "approved", True, "policy: approval not required"
     else:
         limit = float(automation["AUTO_APPROVE_MAX_TOTAL"] or 0)
-        if limit > 0 and run_total <= limit and not [a for a in found if a['severity'] != 'low'] and invoices_out:
+        if limit > 0 and run_total <= limit and not [a for a in found if a['severity'] != 'low'] and invoices_out and not queue["flagged"]:
             run.status, run.auto_approved, run.approved_by = "approved", True, f"policy: clean run under ₹{limit:,.0f}"
         else:
             run.status = "pending_approval"
     if run.status == "approved":
         run.approved_at = datetime.datetime.utcnow()
+        review.auto_clear(db, run.id)
         usage_snapshots.freeze(db, period)
         if settings_store.is_yes(automation["AUTO_ISSUE_ON_APPROVAL"]):
             db.flush()
@@ -282,7 +285,7 @@ def run_detail(run_id: int, db: Session = Depends(get_db), user: User = Depends(
     return {"id": run.id, "period": run.period, "tds_rate": run.tds_rate, "status": run.status,
             "summary": run.summary, "invoices": invoices, "created_by": run.created_by, "trigger": run.trigger,
             "approved_by": run.approved_by, "approved_at": run.approved_at.isoformat() if run.approved_at else None,
-            "auto_approved": run.auto_approved, "rejection_reason": run.rejection_reason}
+            "auto_approved": run.auto_approved, "rejection_reason": run.rejection_reason, "review": review.counts(db, run.id)}
 
 
 class ApproveIn(BaseModel):
@@ -299,6 +302,9 @@ def approve_run(run_id: int, payload: ApproveIn, db: Session = Depends(get_db), 
     automation = settings_store.get_automation(db)
     if run.created_by == user.email and not settings_store.is_yes(automation["APPROVAL_ALLOW_SELF"]):
         raise HTTPException(403, "Maker-checker: you generated this run, so someone else in Finance must approve it")
+    pending = review.counts(db, run_id)["open"]
+    if pending:
+        raise HTTPException(409, f"{pending} invoice(s) in the review queue still need a check before this run can be locked")
     high = [a for a in (run.summary or {}).get("anomalies", []) if a["severity"] == "high"]
     if high and not payload.acknowledge_high:
         raise HTTPException(409, f"{len(high)} high-severity finding(s) must be acknowledged before approving")
@@ -349,44 +355,26 @@ def issue_all(run_id: int, db: Session = Depends(get_db), user: User = Depends(r
 
 @router.post("/runs/{run_id}/push-zoho")
 def push_run_to_zoho(run_id: int, db: Session = Depends(get_db), user: User = Depends(require_write("billing"))):
+    """Synchronous push (kept for scripts and small runs). The Close screen uses the background job instead."""
     run = db.query(BillingRun).get(run_id)
     if not run:
         raise HTTPException(404, "Run not found")
     if run.status not in ("approved", "pushed"):
         raise HTTPException(400, "Only an approved run can be pushed to Zoho")
     pushed, failed = [], []
-    for inv in run.invoices:
-        if inv.zoho_invoice_id or inv.status == "cancelled":
-            continue
-        client = db.query(Client).get(inv.client_id)
-        account = db.query(BillingAccount).filter(BillingAccount.client_id == client.id).first()
-        contact_id = client.zoho_contact_id
-        if not contact_id:  # create the contact on the fly, using the Zoho billing name when we know it
-            try:
-                contact_id = zoho.create_contact((account.zoho_billing_name if account and account.zoho_billing_name else client.name), client.gst)["contact_id"]
-                client.zoho_contact_id = contact_id
-            except Exception as exc:
-                failed.append({"invoice_no": inv.invoice_no, "reason": f"could not create Zoho contact: {exc}"})
-                continue
-        notes = f"Platform Fee {run.period}"
-        if account is not None and not account.auto_debit:
-            notes += " — DO NOT AUTO DEBIT: collect manually."
+    for inv in zoho_push._pushable(run):
         try:
-            if any(l.get("component_type") for l in inv.lines or []):  # v2: one Zoho line per charge
-                lines = [{"label": l["label"], "detail": l.get("calc_detail", ""), "amount": l["amount"]} for l in inv.lines if l.get("amount")]
-                result = zoho.push_invoice_lines(contact_id, inv.invoice_no, (inv.issued_at or inv.created_at).date().isoformat(), inv.due_date, lines, notes)
-            else:
-                breakdown = [f"{l['label']}: ₹{l['amount']:,.2f} ({l['calc_detail']})" for l in inv.lines]
-                result = zoho.push_draft_invoice(contact_id, f"Invoice for the month of {run.period}", inv.total,
-                                                 "\n".join(breakdown) + f"\n{inv.gst_type}: ₹{inv.gst:,.2f} · TDS: ₹{inv.tds:,.2f} · Total: ₹{inv.total:,.2f}")
+            zoho_push.push_one(db, run, inv)
+            pushed.append(inv.invoice_no)
         except Exception as exc:
+            db.rollback()
+            inv = db.query(Invoice).get(inv.id)
+            inv.zoho_error = str(exc)[:300]
             failed.append({"invoice_no": inv.invoice_no, "reason": str(exc)})
-            continue
-        inv.zoho_invoice_id = result["invoice_id"]  # status is left alone: the invoice stays issued/sent/paid natively
-        pushed.append(inv.invoice_no)
+        db.commit()
     if pushed and not failed:
         run.status = "pushed"
-    db.commit()
+        db.commit()
     log_action(db, user, "billing.push_zoho", "billing_run", f"run={run_id} pushed={len(pushed)} failed={len(failed)}")
     return {"pushed": pushed, "failed": failed}
 

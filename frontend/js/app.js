@@ -11,6 +11,7 @@ const PAGES = [
   { id: 'agreements', label: 'Agreements', icon: 'fa-file-lines', group: 'Setup', sub: 'Upload contracts and extract commercial terms' },
   { id: 'accounts', label: 'Billing accounts', icon: 'fa-building-user', group: 'Setup', sub: 'Contracts, lifecycle, groups and usage — the billing engine v2 workspace' },
   { id: 'commercials', label: 'Commercials (v1)', icon: 'fa-sliders', group: 'Setup', sub: 'Simple billing terms for customers not yet on billing accounts' },
+  { id: 'close', label: 'Month close', icon: 'fa-clipboard-check', group: 'Billing', sub: 'Check inputs, calculate, review, lock and push the month to Zoho — one guided flow' },
   { id: 'billing', label: 'Billing', icon: 'fa-file-invoice-dollar', group: 'Billing', sub: 'Run the monthly billing cycle from live usage data' },
   { id: 'sales', label: 'Sales documents', icon: 'fa-file-circle-plus', group: 'Billing', sub: 'Ad-hoc invoices, quotes, recurring invoices, debit notes and receipts' },
   { id: 'invoices', label: 'Invoices', icon: 'fa-receipt', group: 'Billing', sub: 'Issue, send and track invoices' },
@@ -837,8 +838,9 @@ async function renderBilling(content) {
                 : '<div class="finding ok"><i class="fa-solid fa-circle-check"></i><div>No findings — usage is consistent with previous months.</div></div>'}
         ${pending && isFinance() ? `
           <div class="approval-bar">
-            ${high.length ? `<label class="inline-check"><input type="checkbox" id="ack-high" /> I have reviewed the ${high.length} high-severity finding(s)</label>` : '<span class="muted">Review the invoices below, then approve to issue them.</span>'}
-            <div class="actions-row" style="margin:0"><button id="approve-run" ${high.length ? 'disabled' : ''}><i class="fa-solid fa-check"></i> Approve run</button><button class="ghost" id="reject-run"><i class="fa-solid fa-xmark"></i> Reject</button></div>
+            ${run.review && run.review.open ? `<span><b>${run.review.open}</b> invoice(s) still need a second check before this run can be locked. <a href="#close" onclick="state.close=Object.assign(state.close||{}, {period:'${run.period}'})">Open the month close</a></span>` : ''}
+            ${high.length ? `<label class="inline-check"><input type="checkbox" id="ack-high" /> I have reviewed the ${high.length} high-severity finding(s)</label>` : (run.review && run.review.open ? '' : '<span class="muted">Review the invoices below, then approve to issue them.</span>')}
+            <div class="actions-row" style="margin:0"><button id="approve-run" ${high.length || (run.review && run.review.open) ? 'disabled' : ''}><i class="fa-solid fa-check"></i> Approve run</button><button class="ghost" id="reject-run"><i class="fa-solid fa-xmark"></i> Reject</button></div>
           </div>` : ''}
         ${pending && !isFinance() ? '<div class="alert-bar warn"><i class="fa-solid fa-hourglass-half"></i><span>Waiting for Finance to approve this run. Invoices cannot be issued until then.</span></div>' : ''}
         ${run.invoices.map(inv => `
@@ -1457,7 +1459,7 @@ const RENDERERS = {
   audit: renderAudit,
   settings: renderSettings,
 };
-Object.assign(RENDERERS, MODULE_RENDERERS, V2_RENDERERS, INSIGHT_RENDERERS);
+Object.assign(RENDERERS, MODULE_RENDERERS, V2_RENDERERS, INSIGHT_RENDERERS, CLOSE_RENDERERS);
 
 boot();
 

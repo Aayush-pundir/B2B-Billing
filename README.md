@@ -14,6 +14,16 @@ payment match below full confidence lands in a human review queue.
 Built entirely offline — no external AI API cost. All extraction, billing
 calculation, reconciliation, and reporting runs locally.
 
+## Month-end close
+
+**Month close** (under Billing) is the monthly job as one guided flow:
+
+1. **Check inputs:** usage feed connected, usage loaded for the month, every billable account mapped to a platform enterprise, every charge modelled, no unlocked contract drafts, last month locked, Zoho connected.
+2. **Calculate:** reads usage straight from the platform database. Accounts that cannot be billed correctly are withheld, never billed ₹0.
+3. **Review:** every unusual invoice is queued with the reason it is there: first invoice, part-month (start, stop, demo), minimum or cap applied, a sharp swing on last month, hand-entered usage, group fee, new contract, open findings. A small random sample of clean invoices is queued too. A second Finance person marks each one checked, or leaves it out with a reason.
+4. **Lock:** only possible when the queue is empty, and not by the person who calculated the run.
+5. **Push to Zoho:** a background job creates the draft invoices (one Zoho line per charge) with progress, per-invoice errors, safe re-runs and no duplicates (matched on invoice reference). Customers are matched in Zoho by GSTIN or name before a new one is created. Set `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`, `ZOHO_REFRESH_TOKEN` and `ZOHO_ORG_ID`; until then it runs in simulation mode.
+
 ## Order-to-cash cycle
 
 1. **Customer master data** — full identity/tax/contact/billing profile; bulk

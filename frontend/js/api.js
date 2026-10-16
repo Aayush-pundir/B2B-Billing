@@ -159,6 +159,9 @@ const Apx = {
   v2form: (path, file, params = '') => { const fd = new FormData(); fd.append('file', file); return request('/api/v2' + path + params, { method: 'POST', body: fd, isForm: true }); },
   v2mappingTemplateUrl: () => `${API_BASE}/api/v2/import/mapping-template`,
 
+  // month-end close
+  closeApi: (path, opts) => request('/api/close' + path, opts),
+
   // approvals
   approveRun: (id, acknowledgeHigh) => request(`/api/billing/runs/${id}/approve`, { method: 'POST', body: { acknowledge_high: acknowledgeHigh } }),
   rejectRun: (id, reason) => request(`/api/billing/runs/${id}/reject`, { method: 'POST', body: { reason } }),

@@ -106,8 +106,19 @@ def test_approval_gates_and_snapshot_freeze(fin, fin2, acc):
     assert acc.post(f"/api/billing/runs/{rid}/approve", json={}).status_code == 403
     ex = fin.get(f"/api/v2/exceptions?run_id={rid}").json()
     assert any(e["code"] == "UNMODELLED_COMPONENT" and e["blocks"] for e in ex)
+    q = fin2.get(f"/api/close/runs/{rid}/review").json()
+    assert q["counts"]["open"] > 0 and all(i["reasons"] for i in q["items"])
+    assert any(r["code"] == "first_invoice" for i in q["items"] for r in i["reasons"])       # nothing was billed before: every customer is new
+    assert any(r["code"] == "minimum_applied" for i in q["items"] for r in i["reasons"])      # Beta billed at its minimum
+    assert fin2.post(f"/api/billing/runs/{rid}/approve", json={"acknowledge_high": True}).status_code == 409   # cannot lock with checks outstanding
+    first = q["items"][0]
+    assert fin2.post(f"/api/close/runs/{rid}/review/{first['id']}", json={"action": "exclude"}).status_code == 400   # leaving one out needs a reason
+    assert acc.post(f"/api/close/runs/{rid}/review/{first['id']}", json={"action": "ok"}).status_code == 403          # reviewing is a Finance act
+    done = fin2.post(f"/api/close/runs/{rid}/review-bulk", json={"item_ids": [i["id"] for i in q["items"]], "comment": "checked against usage"}).json()
+    assert done["counts"]["open"] == 0 and done["counts"]["reviewed"] == len(q["items"])
     r = fin2.post(f"/api/billing/runs/{rid}/approve", json={"acknowledge_high": True})
     assert r.status_code == 200 and r.json()["finalized"]["issued"] >= 5
+    assert fin2.post(f"/api/close/runs/{rid}/review/{first['id']}", json={"action": "reopen"}).status_code == 400       # locked is locked
     usage = fin.get(f"/api/v2/usage/{PERIOD}").json()
     assert usage and all(u["frozen"] for u in usage)
     assert fin.put(f"/api/v2/usage/{PERIOD}/ENT-T-2", json={"values": {"maker_count": 99}}).status_code == 400
@@ -335,3 +346,44 @@ def test_database_url_is_normalised_for_managed_postgres():
     assert _normalise_db_url("postgres://u:p@h/db") == "postgresql+psycopg2://u:p@h/db"
     assert _normalise_db_url("postgresql://u:p@h/db") == "postgresql+psycopg2://u:p@h/db"
     assert _normalise_db_url("sqlite:///x.db") == "sqlite:///x.db"
+
+
+def test_month_end_close_review_lock_and_background_push(fin, fin2, acc):
+    from app.services import zoho_push
+    period = "2026-10"
+    r = acc.post("/api/billing/calculate", data={"period": period, "tds_rate": 0}, files=files(loading_file=LOADING, upi_file=UPI, users_file=USERS))
+    assert r.status_code == 200, r.text
+    rid = r.json()["run_id"]
+    q = fin2.get(f"/api/close/runs/{rid}/review").json()
+    assert q["run"]["status"] == "pending_approval" and q["counts"]["open"] > 0
+    # September exists, so October is compared against it: the quiet customers are no longer "first invoice"
+    by_name = {i["client_name"]: i for i in q["items"]}
+    assert by_name["Beta Load Co"]["prev_amount"] == 4000.0                   # compared with September's invoice
+    assert {i["client_name"] for i in q["items"] if any(x["code"] == "first_invoice" for x in i["reasons"])} == {"Fleet Co"}   # the only customer with no earlier invoice
+    # leave one invoice out (with a reason), change our mind, then leave it out again
+    target = q["items"][0]
+    assert fin2.post(f"/api/close/runs/{rid}/review/{target['id']}", json={"action": "exclude", "comment": "customer asked to hold"}).status_code == 200
+    detail = fin2.get(f"/api/billing/runs/{rid}").json()
+    assert next(i for i in detail["invoices"] if i["id"] == target["invoice_id"])["status"] == "cancelled"
+    assert fin2.post(f"/api/close/runs/{rid}/review/{target['id']}", json={"action": "reopen"}).json()["counts"]["excluded"] == 0
+    fin2.post(f"/api/close/runs/{rid}/review/{target['id']}", json={"action": "exclude", "comment": "customer asked to hold"})
+    rest = [i["id"] for i in q["items"] if i["id"] != target["id"]]
+    fin2.post(f"/api/close/runs/{rid}/review-bulk", json={"item_ids": rest})
+    assert fin2.post(f"/api/billing/runs/{rid}/approve", json={"acknowledge_high": True}).status_code == 200
+    # lock, then push in the background; progress is read back from the invoices
+    assert fin.post(f"/api/close/runs/{rid}/zoho/start").status_code == 200
+    zoho_push.wait(rid)
+    st = fin.get(f"/api/close/runs/{rid}/zoho/status").json()
+    assert st["running"] is False and st["simulated"] is True and st["failed"] == 0
+    assert st["pushed"] == st["total"] > 0 and st["run_status"] == "pushed"
+    assert st["total"] == len(detail["invoices"]) - 1                         # the excluded invoice never goes to Zoho
+    assert fin.post(f"/api/close/runs/{rid}/zoho/start").json()["started"] in (True, False) and fin.get(f"/api/close/runs/{rid}/zoho/status").json()["pushed"] == st["pushed"]
+
+
+def test_close_checklist_and_zoho_status(fin):
+    c = fin.get("/api/close/checklist?period=2026-11").json()
+    keys = {i["key"]: i for i in c["items"]}
+    assert {"feed", "usage", "mapping", "modelled", "drafts", "previous", "zoho"} <= set(keys)
+    assert all(i["status"] in ("ok", "warn", "block") and i["detail"] for i in c["items"])
+    assert keys["zoho"]["status"] == "warn"                                                        # no credentials in tests
+    assert fin.post("/api/close/zoho/test").json()["configured"] is False

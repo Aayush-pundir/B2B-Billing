@@ -41,6 +41,52 @@ def get_access_token() -> str | None:
     return str(_token_cache["access_token"])
 
 
+def configured() -> bool:
+    return _is_configured()
+
+
+def _call(method: str, url: str, **kw) -> requests.Response:
+    """One Zoho call, retried with a pause when Zoho rate-limits us (HTTP 429) or hiccups (5xx)."""
+    for attempt in range(4):
+        resp = requests.request(method, url, **kw)
+        if resp.status_code != 429 and resp.status_code < 500:
+            return resp
+        time.sleep(1.5 * (attempt + 1))
+    return resp
+
+
+def test_connection() -> dict:
+    """Prove the saved credentials work and say which Zoho organisation they reach."""
+    if not _is_configured():
+        return {"configured": False, "ok": False, "detail": "ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN and ZOHO_ORG_ID are not all set — invoices are only simulated."}
+    s = get_settings()
+    try:
+        resp = _call("GET", f"{s.ZOHO_API_BASE}/organizations", headers={"Authorization": f"Zoho-oauthtoken {get_access_token()}"}, timeout=15)
+        resp.raise_for_status()
+        orgs = resp.json().get("organizations", [])
+        mine = next((o for o in orgs if str(o.get("organization_id")) == str(s.ZOHO_ORG_ID)), None)
+        if mine is None:
+            return {"configured": True, "ok": False, "detail": f"Connected, but organisation {s.ZOHO_ORG_ID} is not among this login's organisations."}
+        return {"configured": True, "ok": True, "detail": f"Connected to {mine.get('name')}", "organization": mine.get("name")}
+    except Exception as exc:
+        return {"configured": True, "ok": False, "detail": f"Could not reach Zoho: {exc}"}
+
+
+def find_contact(name: str, gstin: str = "") -> str | None:
+    """Reuse an existing Zoho customer (matched on GSTIN, then exact name) instead of creating a duplicate."""
+    if not _is_configured():
+        return None
+    s = get_settings()
+    headers = {"Authorization": f"Zoho-oauthtoken {get_access_token()}"}
+    for params in ([{"gst_no": gstin}] if gstin else []) + [{"contact_name": name}]:
+        resp = _call("GET", f"{s.ZOHO_API_BASE}/contacts", params={"organization_id": s.ZOHO_ORG_ID, **params}, headers=headers, timeout=15)
+        if resp.ok:
+            for c in resp.json().get("contacts", []):
+                if c.get("contact_type", "customer") == "customer":
+                    return c["contact_id"]
+    return None
+
+
 def create_contact(client_name: str, gstin: str = "") -> dict:
     """Create a Zoho Books contact for a client. Returns {"contact_id": ...}."""
     if not _is_configured():
@@ -48,6 +94,9 @@ def create_contact(client_name: str, gstin: str = "") -> dict:
 
     s = get_settings()
     token = get_access_token()
+    existing = find_contact(client_name, gstin)
+    if existing:
+        return {"contact_id": existing, "simulated": False, "existing": True}
     resp = requests.post(
         f"{s.ZOHO_API_BASE}/contacts",
         params={"organization_id": s.ZOHO_ORG_ID},
@@ -92,13 +141,18 @@ def push_invoice_lines(contact_id: str, reference: str, date: str, due_date: str
     s = get_settings()
     headers = {"Authorization": f"Zoho-oauthtoken {get_access_token()}"}
     params = {"organization_id": s.ZOHO_ORG_ID}
-    found = requests.get(f"{s.ZOHO_API_BASE}/invoices", params={**params, "reference_number": reference}, headers=headers, timeout=15)
+    found = _call("GET", f"{s.ZOHO_API_BASE}/invoices", params={**params, "reference_number": reference}, headers=headers, timeout=15)
     if found.ok and found.json().get("invoices"):
         return {"invoice_id": found.json()["invoices"][0]["invoice_id"], "simulated": False, "existing": True}
     body = {"customer_id": contact_id, "reference_number": reference, "date": date, "notes": notes,
             "line_items": [{"name": l["label"][:100], "description": l.get("detail", "")[:500], "rate": l["amount"], "quantity": 1} for l in lines]}
     if due_date:
         body["due_date"] = due_date
-    resp = requests.post(f"{s.ZOHO_API_BASE}/invoices", params=params, headers=headers, json=body, timeout=20)
-    resp.raise_for_status()
+    resp = _call("POST", f"{s.ZOHO_API_BASE}/invoices", params=params, headers=headers, json=body, timeout=20)
+    if not resp.ok:
+        try:
+            msg = resp.json().get("message") or resp.text[:200]
+        except ValueError:
+            msg = resp.text[:200]
+        raise RuntimeError(f"Zoho said: {msg}")
     return {"invoice_id": resp.json()["invoice"]["invoice_id"], "simulated": False}
