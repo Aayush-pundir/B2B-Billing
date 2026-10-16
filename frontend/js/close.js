@@ -143,7 +143,7 @@ async function renderClose(content) {
       <td><button class="linklike rv-open"><i class="fa-solid fa-chevron-${open ? 'down' : 'right'}"></i> <b>${esc(i.client_name)}</b></button><div class="muted mono">${esc(i.invoice_no)}</div></td>
       <td class="right amount">${money(i.amount)}${delta}</td>
       <td class="right amount">${i.prev_amount == null ? '<span class="muted">new</span>' : money(i.prev_amount)}</td>
-      <td>${i.reasons.map(r => `<span class="rchip ${r.severity}" title="${esc(r.label)}">${esc(r.label.length > 46 ? r.label.slice(0, 44) + '…' : r.label)}</span>`).join(' ')}
+      <td class="why">${i.reasons.map(r => `<span class="rchip ${r.severity}" title="${esc(r.label)}">${esc(r.label.length > 46 ? r.label.slice(0, 44) + '…' : r.label)}</span>`).join(' ')}
         ${i.status !== 'needs_review' ? `<div class="muted">${i.status === 'excluded' ? 'Left out' : 'Checked'} by ${esc(i.reviewed_by)}${i.comment ? ' — ' + esc(i.comment) : ''}</div>` : ''}</td>
       <td class="right nowrap">${canReview ? (i.status === 'needs_review'
         ? '<button class="ghost rv-ok">Looks right</button> <button class="ghost rv-out" title="Leave this invoice out of the run">Leave out</button>'

@@ -551,3 +551,6 @@ svg.bars text.bc-val { fill: var(--ink-2); font-weight: 600; } svg.bars text.bc-
 .assume-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
 .assume-list li { display: flex; gap: 1rem; align-items: center; justify-content: space-between; padding: .6rem .8rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .assume-list li.ok { opacity: .75; }
+
+table.rv td.why { white-space: normal; min-width: 240px; }
+table.rv .rchip { white-space: normal; }
