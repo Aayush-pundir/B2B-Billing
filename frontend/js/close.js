@@ -12,7 +12,7 @@ function closeLastMonth() {
 
 async function renderClose(content) {
   const c = state.close = Object.assign({ period: closeLastMonth(), tab: 'needs_review', reason: '', sel: new Set(), open: new Set() }, state.close || {});
-  let timer = null;
+  let timer = null, ds = null;
   const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
 
   async function load(keepScroll) {
@@ -20,6 +20,7 @@ async function renderClose(content) {
     const y = window.scrollY;
     const chk = await Apx.closeApi(`/checklist?period=${c.period}`);
     const run = chk.run;
+    if (!ds) ds = await Apx.datasource();
     const q = run ? await Apx.closeApi(`/runs/${run.id}/review`) : null;
     const locked = run && ['approved', 'pushed'].includes(run.status);
     const z = locked ? await Apx.closeApi(`/runs/${run.id}/zoho/status`) : null;
@@ -39,18 +40,33 @@ async function renderClose(content) {
     return 'zoho';
   }
 
-  function stepper(cur) {
+  function stepper(cur, inputsWarn) {
     const at = CLOSE_STEPS.findIndex(s => s[0] === cur);
     return `<ol class="stepper">${CLOSE_STEPS.map(([id, label], i) => {
-      const cls = cur === 'done' || i < at ? 'done' : i === at ? 'now' : '';
-      return `<li class="${cls}"><span class="dot">${cls === 'done' ? '<i class="fa-solid fa-check"></i>' : i + 1}</span>${label}</li>`;
+      let cls = cur === 'done' || i < at ? 'done' : i === at ? 'now' : '';
+      if (id === 'inputs' && inputsWarn && cls === 'done') cls = 'warn';
+      return `<li class="${cls}"><span class="dot">${cls === 'done' ? '<i class="fa-solid fa-check"></i>' : cls === 'warn' ? '<i class="fa-solid fa-exclamation"></i>' : i + 1}</span>${label}</li>`;
     }).join('')}</ol>`;
   }
 
-  function card(id, n, title, summary, body, cur, doneWhen) {
-    const isDone = doneWhen, isNow = cur === id;
-    return `<details class="step-card ${isDone ? 'done' : ''} ${isNow ? 'now' : ''}" ${isNow || c.open.has(id) ? 'open' : ''} data-step="${id}">
-      <summary><span class="dot">${isDone ? '<i class="fa-solid fa-check"></i>' : n}</span><b>${title}</b><span class="muted sum">${summary}</span></summary>
+  function nextAction(cur, chk, run, q, z, blockers) {
+    const msg = {
+      calc: [`Calculate ${c.period}`, `${chk.billable_accounts} accounts are billable. Usage is read from the platform database.`, 'calc'],
+      review: [`${q && q.counts.open || 0} invoice(s) need a second look`, 'Check the flagged ones first; the biggest rupee swings are at the top.', 'review'],
+      lock: ['Ready to lock', 'Everything is checked. A different Finance person locks the month.', 'lock'],
+      zoho: ['Locked — push to Zoho', `${z ? z.total - z.pushed : 0} invoice(s) are waiting.`, 'zoho'],
+      done: [`${c.period} is closed`, 'Every invoice is in Zoho. Nothing left to do this month.', null],
+    }[cur];
+    if (!msg) return '';
+    const extra = blockers && cur !== 'done' ? ` ${blockers} account(s) will be withheld until their inputs are fixed.` : '';
+    return `<div class="next-action ${cur === 'done' ? 'done' : ''}"><div><span class="eyebrow">Next step</span><b>${esc(msg[0])}</b><span class="muted">${esc(msg[1] + extra)}</span></div>
+      ${msg[2] ? `<button class="ghost" id="na-go" data-step="${msg[2]}">Go to step</button>` : ''}</div>`;
+  }
+
+  function card(id, n, title, summary, body, cur, doneWhen, warn) {
+    const isDone = doneWhen && !warn, isNow = cur === id;
+    return `<details class="step-card ${isDone ? 'done' : ''} ${warn ? 'warn' : ''} ${isNow ? 'now' : ''}" ${isNow || c.open.has(id) ? 'open' : ''} data-step="${id}">
+      <summary><span class="dot">${isDone ? '<i class="fa-solid fa-check"></i>' : warn ? '<i class="fa-solid fa-exclamation"></i>' : n}</span><b>${title}</b><span class="muted sum">${summary}</span></summary>
       <div class="step-body">${body}</div></details>`;
   }
 
@@ -65,9 +81,13 @@ async function renderClose(content) {
 
     let calc;
     if (!run) {
-      calc = `<p class="muted">${chk.billable_accounts} accounts are billable in ${esc(c.period)}. Usage is read straight from the platform database; nothing to upload.</p>
-        <div class="actions-row"><button id="calc-go" ${isFinance() || canBill() ? '' : 'disabled'}><i class="fa-solid fa-calculator"></i> Calculate ${esc(c.period)}</button>
-        <a class="btn ghost" href="#billing">Use CSV files instead</a></div>`;
+      const csv = `<div class="csv-fallback"><div class="csv-grid">${[['loading', 'Loading'], ['upi', 'UPI'], ['users', 'Users']].map(([k, l]) => `<label>${l} CSV <a href="${Apx.templateUrl(k)}">template</a><input type="file" id="csv-${k}" accept=".csv" /></label>`).join('')}</div>
+          <div class="actions-row"><button class="secondary" id="calc-csv"><i class="fa-solid fa-file-csv"></i> Calculate ${esc(c.period)} from these files</button></div></div>`;
+      calc = ds.configured
+        ? `<p class="muted">${chk.billable_accounts} accounts are billable in ${esc(c.period)}. Usage is read straight from the platform database (${esc(ds.host || ds.dialect)}); nothing to upload.</p>
+          <div class="actions-row"><button id="calc-go" ${isFinance() || canBill() ? '' : 'disabled'}><i class="fa-solid fa-calculator"></i> Calculate ${esc(c.period)}</button></div>
+          <details class="fallback"><summary>Use CSV files instead</summary>${csv}</details>`
+        : `<div class="alert-bar warn"><i class="fa-solid fa-plug"></i><span>The usage database isn't connected yet (set <code>USAGE_DATABASE_URL</code> on the server). Until then, upload the three usage exports.</span></div>${csv}`;
     } else {
       const w = q.run.withheld || [];
       calc = `<div class="stat-grid mini">
@@ -126,8 +146,8 @@ async function renderClose(content) {
         <div id="zo-errs">${zohoErrors(z)}</div>`;
     }
 
-    body.innerHTML = `${stepper(cur)}
-      ${card('inputs', 1, 'Check inputs', blockers ? `${blockers} to fix` : warns ? `${warns} worth a look` : 'all good', inputs, cur, !!run)}
+    body.innerHTML = `${nextAction(cur, chk, run, q, z, blockers)}${stepper(cur, blockers > 0)}
+      ${card('inputs', 1, 'Check inputs', blockers ? `${blockers} to fix` : warns ? `${warns} worth a look` : 'all good', inputs, cur, !!run, blockers > 0)}
       ${card('calc', 2, 'Calculate', run ? `${q.run.invoices} invoices · ${money(q.run.total)}` : 'not run yet', calc, cur, !!run)}
       ${card('review', 3, 'Review', revSum, rev, cur, run && q && run.status !== 'pending_approval' || (run && q && q.counts.open === 0 && run.status === 'pending_approval' && q.counts.total > 0))}
       ${card('lock', 4, 'Lock', lockSum, lock, cur, run && ['approved', 'pushed'].includes(run.status))}
@@ -161,6 +181,18 @@ async function renderClose(content) {
     if (go) go.addEventListener('click', () => { go.disabled = true; go.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Calculating…';
       const fd = new FormData(); fd.append('period', c.period); fd.append('tds_rate', '0');
       act(() => Apx.calculateBillingDb(fd), 'Calculated — review what needs a second look'); });
+
+    const na = body.querySelector('#na-go');
+    if (na) na.addEventListener('click', () => { const d = body.querySelector(`details[data-step=${na.dataset.step}]`); if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'start' }); } });
+
+    const csvGo = body.querySelector('#calc-csv');
+    if (csvGo) csvGo.addEventListener('click', () => {
+      const f = ['loading', 'upi', 'users'].map(k => body.querySelector(`#csv-${k}`).files[0]);
+      if (f.some(x => !x)) return toast('All three CSV files are needed', true);
+      const fd = new FormData(); fd.append('period', c.period); fd.append('tds_rate', '0'); fd.append('confirm_annual', '');
+      fd.append('loading_file', f[0]); fd.append('upi_file', f[1]); fd.append('users_file', f[2]);
+      csvGo.disabled = true; act(() => Apx.calculateBilling(fd), 'Calculated from your CSV files');
+    });
 
     on('.seg-btn', (e) => { c.tab = e.currentTarget.dataset.tab; c.sel.clear(); draw(chk, run, q, z); });
     const rs = body.querySelector('#rv-reason'); if (rs) rs.addEventListener('change', (e) => { c.reason = e.target.value; c.sel.clear(); draw(chk, run, q, z); });

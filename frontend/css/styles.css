@@ -558,3 +558,25 @@ table.rv .rchip { white-space: normal; }
 /* Invoice rows: keep the action buttons inside the card */
 #inv-table td:last-child { white-space: nowrap; text-align: right; }
 #inv-table td:last-child .btn, #inv-table td:last-child button { padding: .3rem .55rem; }
+
+/* Month close: next-step banner, warning state, inline CSV fallback */
+.next-action { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .9rem 1.1rem; margin-bottom: 1rem; border: 1px solid var(--primary); background: var(--primary-soft); border-radius: var(--radius); }
+.next-action > div { display: flex; flex-direction: column; gap: .15rem; }
+.next-action .eyebrow { font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; color: var(--primary); font-weight: 600; }
+.next-action.done { border-color: var(--ok); background: var(--ok-soft); }
+.next-action.done .eyebrow { color: var(--ok); }
+.stepper li.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.stepper .warn .dot, .step-card.warn > summary .dot { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.step-card.warn { border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.csv-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .6rem; margin: .6rem 0; }
+@media (max-width: 720px) {
+  .csv-grid { grid-template-columns: 1fr; }
+  .next-action { flex-direction: column; align-items: stretch; }
+  table.rv thead { display: none; }
+  table.rv, table.rv tbody, table.rv tr, table.rv td { display: block; width: 100%; }
+  table.rv tr { padding: .7rem 0; border-bottom: 1px solid var(--border); }
+  table.rv td { padding: .2rem 0; text-align: left !important; border: 0; }
+  table.rv td.right.nowrap { display: flex; gap: .5rem; padding-top: .5rem; }
+  table.rv td.right.nowrap button { flex: 1; min-height: 44px; }
+}
+.alert-bar.info { background: var(--primary-soft); color: var(--primary); border-color: color-mix(in srgb, var(--primary) 25%, transparent); }

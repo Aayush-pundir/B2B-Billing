@@ -117,7 +117,7 @@ function showApp() {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
   renderSidebar();
-  navigate(location.hash.replace('#', '') || 'dashboard');
+  navigate(location.hash.replace('#', '') || (['finance', 'accounts'].includes(state.user.role) ? 'close' : 'dashboard'));
 }
 
 function renderSidebar() {
@@ -754,39 +754,10 @@ function renderDatasourceTest(results) {
 }
 
 async function renderBilling(content) {
-  const [runs, ds] = await Promise.all([Apx.listRuns(), Apx.datasource()]);
-  const today = new Date();
-  const defaultPeriod = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  const runs = await Apx.listRuns();
 
   content.innerHTML = `
-    <div class="card">
-      <div class="flex-between">
-        <h3>Run monthly billing</h3>
-        ${ds.configured
-          ? `<span class="badge locked" title="${esc(ds.dialect)} · ${esc(ds.host)}">Database connected</span>`
-          : '<span class="badge draft">Database not configured</span>'}
-      </div>
-      <p class="muted">Usage — loading, UPI transactions and users — is pulled straight from the platform database for the period you pick. Each customer is billed on its locked terms.</p>
-      ${ds.configured ? '' : '<div class="alert-bar warn"><i class="fa-solid fa-plug"></i> Set <code>USAGE_DATABASE_URL</code> on the server to enable the live database feed. Until then, use the CSV fallback below.</div>'}
-      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.6rem;max-width:640px;">
-        <label>Period<input type="month" id="b-period" value="${defaultPeriod}" /></label>
-        <label>TDS Rate %<input type="number" id="b-tds" value="0" step="0.1" /></label>
-      </div>
-      <div class="actions-row">
-        <button id="b-run-db" ${ds.configured ? '' : 'disabled'}><i class="fa-solid fa-database"></i> Calculate from database</button>
-        <button class="ghost" id="b-test" ${ds.configured ? '' : 'disabled'}><i class="fa-solid fa-vial"></i> Preview usage</button>
-      </div>
-      <div id="b-test-result"></div>
-      <details class="fallback">
-        <summary>Fallback: upload CSV exports instead</summary>
-        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:0.6rem;max-width:640px;margin-top:.8rem">
-          <label><span>Loading CSV <a href="${Apx.templateUrl('loading')}">template</a></span><input type="file" id="b-loading" accept=".csv" /></label>
-          <label><span>UPI CSV <a href="${Apx.templateUrl('upi')}">template</a></span><input type="file" id="b-upi" accept=".csv" /></label>
-          <label><span>Users CSV <a href="${Apx.templateUrl('users')}">template</a></span><input type="file" id="b-users" accept=".csv" /></label>
-        </div>
-        <div class="actions-row" style="margin-top:.8rem"><button class="ghost" id="b-run">Calculate from CSVs</button></div>
-      </details>
-    </div>
+    <div class="alert-bar info"><i class="fa-solid fa-clipboard-check"></i><span>Calculating, reviewing and locking a month now happens in <a href="#close">Month close</a>. This page keeps the history of every run.</span></div>
     <div id="b-result"></div>
     <div class="card">
       <h3>Past Runs</h3>
@@ -797,55 +768,6 @@ async function renderBilling(content) {
     </div>
     <div id="run-detail"></div>
   `;
-
-  const showRunResult = (res) => {
-    document.getElementById('b-result').innerHTML = `
-      <div class="card">
-        <h3>Run #${res.run_id} — ${res.invoices.length} invoice(s) generated <span class="badge ${res.status}">${esc(res.status.replace('_', ' '))}</span></h3>
-        ${res.status === 'pending_approval' ? `<div class="alert-bar warn"><i class="fa-solid fa-hourglass-half"></i><span>Sent to Finance for approval${res.anomalies.length ? ` — ${res.anomalies.length} finding(s) to review` : ''}.</span></div>` : ''}
-        ${res.unknown_enterprise_ids.length ? `<div class="alert-bar warn">Usage found for EnterpriseIds that are not registered customers: ${res.unknown_enterprise_ids.join(', ')}</div>` : ''}
-        ${res.skipped.length ? `<h4>Skipped</h4><div class="table-wrap"><table><thead><tr><th>EnterpriseId</th><th>Reason</th></tr></thead><tbody>${res.skipped.map(s => `<tr><td>${esc(s.enterprise_id)}</td><td>${esc(s.reason)}</td></tr>`).join('')}</tbody></table></div>` : ''}
-      </div>`;
-    viewRun(res.run_id);
-  };
-
-  document.getElementById('b-run-db').addEventListener('click', async (e) => {
-    const btn = e.currentTarget; btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Reading usage…';
-    const fd = new FormData();
-    fd.append('period', document.getElementById('b-period').value);
-    fd.append('tds_rate', document.getElementById('b-tds').value || '0');
-    fd.append('confirm_annual', '');
-    try { showRunResult(await Apx.calculateBillingDb(fd)); toast('Billing run created from database usage'); }
-    catch (err) {
-      if (/already exists/.test(err.message) && confirm(err.message + '\n\nCreate another run for this period anyway?')) {
-        fd.append('force', 'true');
-        try { showRunResult(await Apx.calculateBillingDb(fd)); toast('Billing run created'); } catch (e2) { toast(e2.message, true); }
-      } else if (!/already exists/.test(err.message)) toast(err.message, true);
-    }
-    btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-database"></i> Calculate from database';
-  });
-
-  document.getElementById('b-test').addEventListener('click', async () => {
-    const box = document.getElementById('b-test-result');
-    box.innerHTML = '<p class="muted"><i class="fa-solid fa-spinner fa-spin"></i> Querying…</p>';
-    try { box.innerHTML = renderDatasourceTest((await Apx.testDatasource(document.getElementById('b-period').value)).results); }
-    catch (err) { box.innerHTML = ''; toast(err.message, true); }
-  });
-
-  document.getElementById('b-run').addEventListener('click', async () => {
-    const loading = document.getElementById('b-loading').files[0];
-    const upi = document.getElementById('b-upi').files[0];
-    const users = document.getElementById('b-users').files[0];
-    if (!loading || !upi || !users) return toast('All three CSVs are required', true);
-    const fd = new FormData();
-    fd.append('period', document.getElementById('b-period').value);
-    fd.append('tds_rate', document.getElementById('b-tds').value || '0');
-    fd.append('confirm_annual', '');
-    fd.append('loading_file', loading);
-    fd.append('upi_file', upi);
-    fd.append('users_file', users);
-    try { showRunResult(await Apx.calculateBilling(fd)); } catch (e) { toast(e.message, true); }
-  });
 
   content.querySelectorAll('.view-run').forEach(btn => btn.addEventListener('click', (e) => {
     viewRun(e.target.closest('tr').dataset.id);

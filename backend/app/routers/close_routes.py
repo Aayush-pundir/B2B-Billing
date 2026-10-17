@@ -101,7 +101,10 @@ def review_queue(run_id: int, db: Session = Depends(get_db), user: User = Depend
     clients = {c.id: c for c in db.query(Client).filter(Client.id.in_({r.client_id for r in rows}))} if rows else {}
     order = {"high": 0, "medium": 1, "low": 2}
     items = [_serialize(r, invs.get(r.invoice_id), clients.get(r.client_id)) for r in rows]
-    items.sort(key=lambda x: (x["kind"] == "spot", x["status"] != "needs_review", min((order.get(r["severity"], 1) for r in x["reasons"]), default=1), x["client_name"]))
+    def impact(x):
+        return abs((x["amount"] or 0) - (x["prev_amount"] or 0))
+
+    items.sort(key=lambda x: (x["kind"] == "spot", x["status"] != "needs_review", min((order.get(r["severity"], 1) for r in x["reasons"]), default=1), -impact(x), x["client_name"]))
     summary = run.summary or {}
     return {"run": {"id": run.id, "period": run.period, "status": run.status, "created_by": run.created_by, "approved_by": run.approved_by, "total": summary.get("total", 0),
                     "invoices": len(invs), "withheld": summary.get("skipped", []), "anomalies": summary.get("anomalies", [])},
