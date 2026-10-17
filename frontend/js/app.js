@@ -5,30 +5,30 @@
 const state = { user: null, route: 'dashboard' };
 
 const PAGES = [
-  { id: 'dashboard', label: 'Dashboard', icon: 'fa-gauge', group: 'Overview', sub: 'Your billing pipeline at a glance' },
-  { id: 'clients', label: 'Customers', icon: 'fa-building', group: 'Setup', sub: 'Customer master data — identity, tax, contacts and billing preferences' },
-  { id: 'items', label: 'Items', icon: 'fa-box', group: 'Setup', sub: 'Products and services you sell — HSN/SAC, rate and GST' },
-  { id: 'agreements', label: 'Agreements', icon: 'fa-file-lines', group: 'Setup', sub: 'Upload contracts and extract commercial terms' },
-  { id: 'accounts', label: 'Billing accounts', icon: 'fa-building-user', group: 'Setup', sub: 'Contracts, lifecycle, groups and usage — the billing engine v2 workspace' },
-  { id: 'commercials', label: 'Commercials (v1)', icon: 'fa-sliders', group: 'Setup', sub: 'Simple billing terms for customers not yet on billing accounts' },
-  { id: 'close', label: 'Month close', icon: 'fa-clipboard-check', group: 'Billing', sub: 'Check inputs, calculate, review, lock and push the month to Zoho — one guided flow' },
-  { id: 'billing', label: 'Billing', icon: 'fa-file-invoice-dollar', group: 'Billing', sub: 'Run the monthly billing cycle from live usage data' },
-  { id: 'sales', label: 'Sales documents', icon: 'fa-file-circle-plus', group: 'Billing', sub: 'Ad-hoc invoices, quotes, recurring invoices, debit notes and receipts' },
-  { id: 'invoices', label: 'Invoices', icon: 'fa-receipt', group: 'Billing', sub: 'Issue, send and track invoices' },
-  { id: 'purchases', label: 'Purchases', icon: 'fa-cart-shopping', group: 'Purchases', sub: 'Vendors, bills and payments' },
+  { id: 'dashboard', label: 'Dashboard', icon: 'fa-gauge', group: 'Month-end', sub: 'Your billing pipeline at a glance' },
+  { id: 'close', label: 'Month close', icon: 'fa-clipboard-check', group: 'Month-end', sub: 'Check inputs, calculate, review, lock and push the month to Zoho — one guided flow' },
+  { id: 'invoices', label: 'Invoices', icon: 'fa-receipt', group: 'Month-end', sub: 'Issue, send and track invoices' },
+  { id: 'accounts', label: 'Billing accounts', icon: 'fa-building-user', group: 'Customers & terms', sub: 'Contracts, lifecycle, groups and usage — the billing engine v2 workspace' },
+  { id: 'clients', label: 'Customers', icon: 'fa-building', group: 'Customers & terms', sub: 'Customer master data — identity, tax, contacts and billing preferences' },
+  { id: 'agreements', label: 'Agreements', icon: 'fa-file-lines', group: 'Customers & terms', sub: 'Upload contracts and extract commercial terms' },
+  { id: 'items', label: 'Items', icon: 'fa-box', group: 'Customers & terms', sub: 'Products and services you sell — HSN/SAC, rate and GST' },
   { id: 'receivables', label: 'Receivables', icon: 'fa-scale-balanced', group: 'Collections', sub: 'Outstanding balances and aging' },
   { id: 'reconciliation', label: 'Reconciliation', icon: 'fa-money-check-dollar', group: 'Collections', sub: 'Match bank payments to invoices' },
   { id: 'credit', label: 'Credit & forecast', icon: 'fa-gauge-high', group: 'Collections', sub: 'Exposure, credit limits and expected collections' },
-  { id: 'crm', label: 'CRM Sync', icon: 'fa-rotate', group: 'Collections', sub: 'Keep client identity in sync with your CRM' },
-  { id: 'accounting', label: 'Accounting', icon: 'fa-book', group: 'Accounting', sub: 'Chart of accounts, journals, ledger and period lock' },
-  { id: 'finreports', label: 'Financial reports', icon: 'fa-chart-pie', group: 'Accounting', sub: 'Trial balance, P&L, balance sheet, aging and GST' },
-  { id: 'insights', label: 'Revenue insights', icon: 'fa-chart-line', group: 'Insights', sub: 'Trends, mix, concentration, retention, risk and forecast' },
-  { id: 'reports', label: 'Reports', icon: 'fa-chart-column', group: 'Insights', sub: 'Export billing and collections reports' },
-  { id: 'metrics', label: 'Metrics & Add-ons', icon: 'fa-layer-group', group: 'Insights', sub: 'Usage metrics and add-on line items' },
+  { id: 'insights', label: 'Revenue insights', icon: 'fa-chart-line', group: 'Reporting', sub: 'Trends, mix, concentration, retention, risk and forecast' },
+  { id: 'finreports', label: 'Financial reports', icon: 'fa-chart-pie', group: 'Reporting', sub: 'Trial balance, P&L, balance sheet, aging and GST' },
+  { id: 'reports', label: 'Reports', icon: 'fa-chart-column', group: 'Reporting', sub: 'Export billing and collections reports' },
+  { id: 'accounting', label: 'Accounting', icon: 'fa-book', group: 'Reporting', sub: 'Chart of accounts, journals, ledger and period lock' },
   { id: 'automation', label: 'Automation', icon: 'fa-robot', group: 'Admin', sub: 'Approvals, scheduled runs, reminders and credit rules' },
   { id: 'users', label: 'Users', icon: 'fa-users', group: 'Admin', sub: 'Team members and roles' },
   { id: 'audit', label: 'Audit', icon: 'fa-clipboard-list', group: 'Admin', sub: 'Every change, with who and when' },
   { id: 'settings', label: 'Settings', icon: 'fa-gear', group: 'Admin', sub: 'Organisation, tax and delivery settings' },
+  { id: 'billing', label: 'Billing runs', icon: 'fa-file-invoice-dollar', group: 'Other tools', sub: 'Run history and the CSV fallback for usage — day-to-day closing is in Month close' },
+  { id: 'commercials', label: 'Simple terms (v1)', icon: 'fa-sliders', group: 'Other tools', sub: 'Simple billing terms for customers not yet on billing accounts' },
+  { id: 'sales', label: 'Sales documents', icon: 'fa-file-circle-plus', group: 'Other tools', sub: 'Ad-hoc invoices, quotes, recurring invoices, debit notes and receipts' },
+  { id: 'purchases', label: 'Purchases', icon: 'fa-cart-shopping', group: 'Other tools', sub: 'Vendors, bills and payments' },
+  { id: 'crm', label: 'CRM Sync', icon: 'fa-rotate', group: 'Other tools', sub: 'Keep client identity in sync with your CRM' },
+  { id: 'metrics', label: 'Metrics & Add-ons', icon: 'fa-layer-group', group: 'Other tools', sub: 'Usage metrics and add-on line items' },
 ];
 
 function toast(msg, isError = false) {
@@ -72,8 +72,8 @@ async function showLogin() {
       <section class="login-hero">
         <div class="brand-lg"><span class="logo-mark"><i class="fa-solid fa-coins"></i></span> BillingOS</div>
         <div>
-          <h2>From agreement to cash, on autopilot.</h2>
-          <p>Extract commercial terms, run slab billing, issue GST-ready invoices and reconcile bank payments — all in one place.</p>
+          <h2>Month-end billing, checked and in Zoho in an afternoon.</h2>
+          <p>Calculate every customer from their contract, get a second person to check the flagged ones, lock the month and push GST-ready invoices to Zoho Books.</p>
           <div class="hero-steps"><span>Agreements</span><span>Billing</span><span>Invoices</span><span>Reconciliation</span><span>Aging</span></div>
         </div>
         <div class="hero-foot">Offline-first · No external AI costs · Human-in-the-loop approvals</div>
@@ -927,12 +927,12 @@ const INV_PAGE = 50;
 const INV_STATUSES = ['draft', 'issued', 'sent', 'partially_paid', 'paid', 'overdue', 'disputed', 'written_off', 'cancelled'];
 
 async function renderInvoices(content) {
-  const f = state.inv = Object.assign({ q: '', status: '', period: '', page: 0 }, state.inv || {});
+  const f = state.inv = Object.assign({ q: '', status: 'active', period: '', page: 0 }, state.inv || {});
   if (state.invQ) { f.q = state.invQ; f.page = 0; state.invQ = ''; }
   content.innerHTML = `
     <div class="card"><div class="actions-row">
       <input id="inv-q" placeholder="Search invoice no. or customer…" value="${esc(f.q)}" style="min-width:260px" />
-      <select id="inv-status"><option value="">All statuses</option>${INV_STATUSES.map(s => `<option value="${s}" ${f.status === s ? 'selected' : ''}>${s.replace('_', ' ')}</option>`).join('')}</select>
+      <select id="inv-status"><option value="active" ${f.status === 'active' ? 'selected' : ''}>Open (hide cancelled)</option><option value="" ${f.status === '' ? 'selected' : ''}>All statuses</option>${INV_STATUSES.map(s => `<option value="${s}" ${f.status === s ? 'selected' : ''}>${s.replace('_', ' ')}</option>`).join('')}</select>
       <input type="month" id="inv-period" value="${esc(f.period)}" title="Billing period" />
       <span class="muted" id="inv-count" style="margin-left:auto"></span>
       <button class="ghost" id="inv-prev" aria-label="Previous page"><i class="fa-solid fa-chevron-left"></i></button>
@@ -966,7 +966,7 @@ async function renderInvoices(content) {
           <td>${i.promise_date ? `<span class="badge sent" title="${esc(i.promise_note || '')}">pays ${esc(i.promise_date)}</span>` : '<span class="muted">—</span>'}${i.last_viewed_at ? ' <i class="fa-solid fa-eye muted" title="Customer viewed on ' + new Date(i.last_viewed_at).toLocaleString() + '"></i>' : ''}</td>
           <td><span class="badge ${i.status}">${esc(i.status)}</span>${i.disputed && i.status !== 'disputed' ? ' <span class="badge draft">disputed</span>' : ''}</td>
           <td>
-            ${i.status === 'draft' ? `<button class="ghost inv-issue" ${i.run_status && !['approved', 'pushed'].includes(i.run_status) ? 'disabled title="The billing run must be approved first"' : ''}>Issue</button>` : ''}
+            ${i.status === 'draft' ? `<button class="ghost inv-issue" ${i.run_status && !['approved', 'pushed'].includes(i.run_status) ? 'disabled title="Locked until the month is approved in Month close"' : ''}>Issue</button>` : ''}
             ${i.public_token ? '<button class="ghost inv-link" title="Copy customer portal link"><i class="fa-solid fa-link"></i></button>' : ''}
             ${['issued', 'sent'].includes(i.status) ? '<button class="ghost inv-send">Send</button>' : ''}
             <a class="btn ghost" href="${Apx.invoicePdfUrl(i.id)}" target="_blank">PDF</a>

@@ -554,3 +554,7 @@ svg.bars text.bc-val { fill: var(--ink-2); font-weight: 600; } svg.bars text.bc-
 
 table.rv td.why { white-space: normal; min-width: 240px; }
 table.rv .rchip { white-space: normal; }
+
+/* Invoice rows: keep the action buttons inside the card */
+#inv-table td:last-child { white-space: nowrap; text-align: right; }
+#inv-table td:last-child .btn, #inv-table td:last-child button { padding: .3rem .55rem; }

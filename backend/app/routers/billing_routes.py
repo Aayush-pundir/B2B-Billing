@@ -396,7 +396,9 @@ def list_invoices(
     """All invoices (newest first). Optional filters and limit/offset let big books page instead of
     shipping everything; X-Total-Count reports the size of the filtered set."""
     query = db.query(Invoice, Client.name, Client.enterprise_id, BillingRun.status).outerjoin(Client, Client.id == Invoice.client_id).outerjoin(BillingRun, BillingRun.id == Invoice.run_id).options(defer(Invoice.lines))
-    if status:
+    if status == "active":
+        query = query.filter(Invoice.status != "cancelled")
+    elif status:
         query = query.filter(Invoice.status == status)
     if period:
         query = query.filter(Invoice.period == period)
