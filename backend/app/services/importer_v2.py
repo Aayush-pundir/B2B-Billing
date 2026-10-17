@@ -316,7 +316,8 @@ def _clear_placeholders(r: dict, comps: list[dict]) -> tuple[list[dict], list[st
             p = {"rate": rate}
             note = None
             if mn and re.search(r"mg from (\d+)\w* month", source, re.I):
-                note = f"The minimum ₹{mn:,.0f} starts from month {re.search(r'mg from (\d+)', source, re.I).group(1)} of service; the go-live date is not on file, so set 'Minimum applies from' on the contract."
+                month_no = re.search(r"mg from (\d+)", source, re.I).group(1)
+                note = f"The minimum ₹{mn:,.0f} starts from month {month_no} of service; the go-live date is not on file, so set 'Minimum applies from' on the contract."
             elif mn:
                 p["min_amount"] = mn
             out.append({"component_type": "load_percent", "label": "Platform fee — % of Add Money", "params": p})
