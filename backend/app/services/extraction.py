@@ -20,6 +20,21 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+
+class OcrExtrasMissing(RuntimeError):
+    """Raised when scanned-PDF/image extraction is attempted but the
+    optional OCR dependencies (PyMuPDF + easyocr) aren't installed — the
+    default deploy skips them deliberately (see requirements-ocr.txt)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Scanned-PDF and image OCR isn't installed on this deployment "
+            "(PyMuPDF + easyocr are optional — see backend/requirements-ocr.txt). "
+            "DOCX and digital PDF extraction work normally. To enable OCR, "
+            "install the extras on a host with enough build resources: "
+            "pip install -r requirements.txt -r requirements-ocr.txt"
+        )
+
 # ---------------------------------------------------------------------------
 # Text extraction per file type (heavy libraries imported lazily so the app
 # starts fast and works even before the OCR extras are installed).
@@ -81,8 +96,11 @@ def is_pdf_scanned(path: str) -> bool:
 
 
 def extract_text_from_scanned_pdf(path: str) -> str:
-    import fitz  # PyMuPDF
-    import easyocr
+    try:
+        import fitz  # PyMuPDF
+        import easyocr
+    except ImportError:
+        raise OcrExtrasMissing() from None
 
     reader = easyocr.Reader(["en"], gpu=False, verbose=False)
     doc = fitz.open(path)
@@ -96,7 +114,10 @@ def extract_text_from_scanned_pdf(path: str) -> str:
 
 
 def extract_text_from_image(path: str) -> str:
-    import easyocr
+    try:
+        import easyocr
+    except ImportError:
+        raise OcrExtrasMissing() from None
 
     reader = easyocr.Reader(["en"], gpu=False, verbose=False)
     result = reader.readtext(path, detail=0, paragraph=True)

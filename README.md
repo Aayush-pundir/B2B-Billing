@@ -71,6 +71,15 @@ persistent Disk (needs a paid instance type) at `/app/data`, or point
 `DATABASE_URL` at a managed Postgres instance instead (Render offers one;
 no code change needed, see below).
 
+**OCR extras are not installed by default on this deploy.** `backend/requirements.txt`
+deliberately excludes PyMuPDF and easyocr — easyocr pulls in torch/torchvision,
+multi-gigabyte dependencies that blow past the free-tier build's memory/disk/time
+limit and were the actual cause of repeated Blueprint build failures. DOCX and
+digital-PDF extraction work normally without them; uploading a scanned PDF or
+an image returns a clear message instead of crashing the build. See
+`backend/requirements-ocr.txt` to add OCR support on a host with real build
+resources (a paid instance type, or anywhere outside the free tier).
+
 `Procfile` is included as a fallback for buildpack-based hosts (Railway,
 Heroku) that don't use the Dockerfile directly.
 
@@ -114,8 +123,8 @@ escalation. See `backend/app/services/engine.py`.
 |---------------------|-------------------------|
 | `.docx`             | python-docx (last table) |
 | `.pdf` (digital)     | pdfplumber              |
-| `.pdf` (scanned)     | PyMuPDF + easyocr        |
-| `.png` / `.jpg`      | easyocr (covers phone photos) |
+| `.pdf` (scanned)     | PyMuPDF + easyocr (optional — see `requirements-ocr.txt`) |
+| `.png` / `.jpg`      | easyocr (optional — covers phone photos) |
 
 Every extracted rule carries a confidence score; low-confidence fields are
 flagged in the UI. Extraction always creates a DRAFT commercial — a human
@@ -127,6 +136,8 @@ validates before anything is billed.
 cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+# optional, needs real build resources — adds scanned-PDF/image OCR:
+# pip install -r requirements-ocr.txt
 cp .env.example .env
 uvicorn app.main:app --reload --port 8502
 ```

@@ -1,0 +1,16 @@
+# Optional OCR extras — scanned-PDF and image/phone-photo agreement
+# extraction. NOT installed by default: easyocr pulls in torch/torchvision,
+# multi-gigabyte dependencies that blow past Render's free-tier build
+# memory/disk/time limit (this is the #1 cause of "Blueprint deploy fails
+# every time" on this stack).
+#
+# DOCX and digital-PDF extraction (the common case) work without these —
+# see backend/app/services/extraction.py, which imports both lazily only
+# inside the scanned/image code path.
+#
+# Install on a host with real build resources (a paid Render instance type,
+# or anywhere outside the free tier):
+#   pip install -r requirements.txt -r requirements-ocr.txt
+
+PyMuPDF>=1.25.0
+easyocr>=1.7.0

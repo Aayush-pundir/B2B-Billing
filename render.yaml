@@ -5,6 +5,13 @@ services:
     dockerfilePath: ./Dockerfile
     plan: free
     healthCheckPath: /health
+    # The Dockerfile installs only backend/requirements.txt (lightweight) —
+    # PyMuPDF/easyocr are deliberately left out of this image (see
+    # backend/requirements-ocr.txt) because they pull in torch/torchvision,
+    # which blew past this plan's build memory/disk/time limit and was the
+    # actual cause of repeated Blueprint failures. Scanned-PDF/image
+    # extraction returns a clear message rather than being available here;
+    # DOCX and digital-PDF extraction are unaffected.
     envVars:
       - key: JWT_SECRET
         generateValue: true
